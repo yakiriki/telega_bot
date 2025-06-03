@@ -1,27 +1,16 @@
 import logging
 import os
-import pytesseract
 import sqlite3
-import httpx
-from datetime import datetime
-from PIL import Image
-from io import BytesIO
-from telegram import Update
+from datetime import datetime, timedelta
+from telegram import Update, Document
 from telegram.ext import (
-    ApplicationBuilder,
-    MessageHandler,
-    filters,
-    ContextTypes,
-    CommandHandler,
+    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
-from bs4 import BeautifulSoup
+import xml.etree.ElementTree as ET
 
-from utils.ocr import extract_text_from_image
-from utils.parser import parse_receipt_text
-from db.database import init_db, insert_expense, get_daily_summary
-
-import asyncio
-import nest_asyncio
+from db.database import init_db, insert_expense, get_summary, delete_item, delete_receipt
+from utils.parser import parse_xml
+from utils.categorizer import categorize_item
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -32,75 +21,122 @@ init_db()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Привіт! Надішли мені фото чека або URL із QR-коду. /summary — витрати за сьогодні"
+        "Привіт! Надішли XML-файл, текст або URL з чеком.\n"
+        "🧾 /summary_day — витрати за день\n"
+        "📅 /summary_week — за тиждень\n"
+        "📆 /summary_month — за місяць\n"
+        "➕ /add назва,ціна,категорія — вручну додати\n"
+        "🗑️ /delete_item ID — видалити товар\n"
+        "🗑️ /delete_receipt ID — видалити чек\n"
     )
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo_file = await update.message.photo[-1].get_file()
-    photo_bytes = await photo_file.download_as_bytearray()
-    image = Image.open(BytesIO(photo_bytes))
-    text = extract_text_from_image(image)
-    logger.info(f"Розпізнаний текст:\n{text}")
-    await process_receipt_text(update, text)
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if text.lower().startswith("http") and text.lower().endswith(".xml"):
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                r = await client.get(text)
+                r.raise_for_status()
+            text = r.text
+        except Exception:
+            await update.message.reply_text("Помилка при завантаженні XML за URL.")
+            return
 
-async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = update.message.text.strip()
+    if "<CHECK" in text:
+        await process_xml(update, text)
+    else:
+        await update.message.reply_text("Надішли XML або скористайся командою.")
+
+async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file: Document = update.message.document
+    if not file.file_name.lower().endswith(".xml"):
+        await update.message.reply_text("Потрібен .xml файл.")
+        return
+    file_obj = await file.get_file()
+    file_data = await file_obj.download_as_bytearray()
+    text = file_data.decode("windows-1251", errors="ignore")
+    await process_xml(update, text)
+
+async def process_xml(update: Update, text: str):
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            text = soup.get_text(separator="\n")
-            logger.info(f"Текст з URL:\n{text}")
-            await process_receipt_text(update, text)
+        root = ET.fromstring(text)
+        items, total, receipt_id = parse_xml(root)
+        user_id = update.effective_user.id
+        for name, price in items:
+            category = categorize_item(name)
+            insert_expense(user_id, name, price, category, receipt_id)
+        reply = [f"✅ Збережено {len(items)} позицій на суму {total:.2f} грн"]
+        for idx, (name, price) in enumerate(items, 1):
+            reply.append(f"{idx}. {name} — {price:.2f} грн")
+        reply.append(f"🧾 ID чеку: {receipt_id}")
+        await update.message.reply_text("\n".join(reply))
     except Exception as e:
-        logger.error(f"Помилка при обробці URL: {e}")
-        await update.message.reply_text("Не вдалося завантажити чек за посиланням.")
+        logger.exception(e)
+        await update.message.reply_text("Помилка при обробці XML.")
 
-async def process_receipt_text(update: Update, text: str):
-    items = parse_receipt_text(text)
-    if not items:
-        await update.message.reply_text("Не вдалося розпізнати чек.")
+async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE, days: int):
+    user_id = update.effective_user.id
+    start_date = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    rows = get_summary(user_id, start_date)
+    if not rows:
+        await update.message.reply_text("Немає даних.")
         return
-
+    reply = ["📊 Витрати:"]
     total = 0
-    for name, price, category in items:
-        insert_expense(update.effective_user.id, name, price, category)
-        total += price
+    for cat, amt in rows:
+        total += amt
+        reply.append(f"{cat}: {amt:.2f} грн")
+    reply.append(f"Загалом: {total:.2f} грн")
+    await update.message.reply_text("\n".join(reply))
 
-    reply_lines = [f"Збережено {len(items)} позицій. Загальна сума: {total:.2f} грн"]
-    for name, price, category in items:
-        reply_lines.append(f"{name}: {price:.2f} грн ({category})")
-    await update.message.reply_text("\n".join(reply_lines))
+async def summary_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await summary(update, context, 1)
 
-async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_daily_summary(update.effective_user.id)
-    if not data:
-        await update.message.reply_text("Ще немає збережених витрат.")
-        return
+async def summary_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await summary(update, context, 7)
 
-    lines = ["📊 Витрати за сьогодні:"]
-    total = 0
-    for category, amount in data:
-        lines.append(f"{category}: {amount:.2f} грн")
-        total += amount
-    lines.append(f"Загалом: {total:.2f} грн")
-    await update.message.reply_text("\n".join(lines))
+async def summary_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await summary(update, context, 30)
 
+async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        args = update.message.text.replace("/add", "", 1).strip().split(",")
+        if len(args) != 3:
+            raise ValueError
+        name, price, category = args
+        price = float(price)
+        insert_expense(update.effective_user.id, name, price, category, "manual")
+        await update.message.reply_text("✅ Додано вручну.")
+    except Exception:
+        await update.message.reply_text("Формат: /add назва,ціна,категорія")
+
+async def delete_item_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        item_id = int(context.args[0])
+        delete_item(item_id)
+        await update.message.reply_text(f"🗑️ Товар {item_id} видалено.")
+    except:
+        await update.message.reply_text("Формат: /delete_item ID")
+
+async def delete_receipt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        receipt_id = context.args[0]
+        delete_receipt(receipt_id)
+        await update.message.reply_text(f"🗑️ Чек {receipt_id} видалено.")
+    except:
+        await update.message.reply_text("Формат: /delete_receipt ID")
 
 if __name__ == "__main__":
-    nest_asyncio.apply()  # <-- добавь это для корректной работы event loop
-
-    async def main():
-        app = ApplicationBuilder().token(TOKEN).build()
-        await app.bot.delete_webhook(drop_pending_updates=True)
-
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("summary", summary))
-        app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"https?://"), handle_url))
-
-        logger.info("Бот запущено...")
-        await app.run_polling()
-
-    asyncio.run(main())
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("summary_day", summary_day))
+    app.add_handler(CommandHandler("summary_week", summary_week))
+    app.add_handler(CommandHandler("summary_month", summary_month))
+    app.add_handler(CommandHandler("add", add))
+    app.add_handler(CommandHandler("delete_item", delete_item_cmd))
+    app.add_handler(CommandHandler("delete_receipt", delete_receipt_cmd))
+    app.add_handler(MessageHandler(filters.Document.XML, handle_file))
+    app.add_handler(MessageHandler(filters.TEXT, handle_text))
+    print("✅ Бот запущено")
+    app.run_polling()
