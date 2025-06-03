@@ -42,3 +42,7 @@ def delete_item(item_id):
 def delete_receipt(receipt_id):
     cur.execute("DELETE FROM expenses WHERE receipt_id = ?", (receipt_id,))
     conn.commit()
+
+def get_all_expenses(user_id):
+    cur.execute("SELECT * FROM expenses WHERE user_id = ? ORDER BY id DESC", (user_id,))
+    return cur.fetchall()
