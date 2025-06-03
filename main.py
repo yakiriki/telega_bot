@@ -7,8 +7,10 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 )
 import xml.etree.ElementTree as ET
-
-from db.database import init_db, insert_expense, get_summary, delete_item, delete_receipt, conn, cur
+from db.database import (
+    init_db, insert_expense, get_summary, delete_item,
+    delete_receipt, get_all_expenses
+)
 from utils.parser import parse_xml
 from utils.categorizer import categorize_item
 
@@ -28,7 +30,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "➕ /add назва,ціна,категорія — вручну додати\n"
         "🗑️ /delete_item ID — видалити товар\n"
         "🗑️ /delete_receipt ID — видалити чек\n"
-        "🔍 /debug — показати всі записи"
+        "🐞 /debug — переглянути всі записи"
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -128,20 +130,23 @@ async def delete_receipt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except:
         await update.message.reply_text("Формат: /delete_receipt ID")
 
-async def debug_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    cur.execute("SELECT id, name, price, date, receipt_id FROM expenses WHERE user_id = ?", (user_id,))
-    rows = cur.fetchall()
+    rows = get_all_expenses(user_id)
     if not rows:
         await update.message.reply_text("База порожня.")
         return
-    reply = ["🔍 Дані в базі:"]
-    for r in rows[:20]:  # обмеження для довжини повідомлення
-        reply.append(f"{r[0]}. {r[1]} — {r[2]:.2f} грн | {r[3]} | чек: {r[4]}")
-    await update.message.reply_text("\n".join(reply))
+    reply = ["📦 База:"]
+    for row in rows:
+        reply.append(f"#{row[0]} | {row[2]} — {row[3]:.2f} грн | {row[4]} | чек: {row[6]}")
+    await update.message.reply_text("\n".join(reply[:50]))
 
 if __name__ == "__main__":
+    from telegram import Bot
     app = ApplicationBuilder().token(TOKEN).build()
+    bot = Bot(TOKEN)
+    import asyncio
+    asyncio.run(bot.delete_webhook())
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("summary_day", summary_day))
     app.add_handler(CommandHandler("summary_week", summary_week))
@@ -149,7 +154,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("add", add))
     app.add_handler(CommandHandler("delete_item", delete_item_cmd))
     app.add_handler(CommandHandler("delete_receipt", delete_receipt_cmd))
-    app.add_handler(CommandHandler("debug", debug_data))
+    app.add_handler(CommandHandler("debug", debug))
     app.add_handler(MessageHandler(filters.Document.XML, handle_file))
     app.add_handler(MessageHandler(filters.TEXT, handle_text))
     print("✅ Бот запущено")
