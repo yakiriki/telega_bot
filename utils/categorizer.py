@@ -1,12 +1,8 @@
 def categorize_item(name: str) -> str:
     name = name.lower()
-    if "хліб" in name or "булк" in name:
-        return "Хліб"
-    elif "вода" in name or "напій" in name:
-        return "Напої"
-    elif "сигарет" in name or "пар" in name:
-        return "Сигарети"
-    elif "томат" in name or "помідор" in name:
-        return "Овочі"
+    if "хліб" in name: return "Хліб"
+    if "вода" in name: return "Вода"
+    if "молоко" in name: return "Молочне"
+    if "пиво" in name: return "Алкоголь"
+    if "сигарет" in name: return "Сигарети"
     return "Інше"
-
