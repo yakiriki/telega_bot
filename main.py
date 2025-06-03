@@ -20,6 +20,9 @@ from utils.ocr import extract_text_from_image
 from utils.parser import parse_receipt_text
 from db.database import init_db, insert_expense, get_daily_summary
 
+import asyncio
+import nest_asyncio
+
 TOKEN = os.getenv("BOT_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
@@ -84,9 +87,10 @@ async def summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append(f"Загалом: {total:.2f} грн")
     await update.message.reply_text("\n".join(lines))
 
-import asyncio
 
 if __name__ == "__main__":
+    nest_asyncio.apply()  # <-- добавь это для корректной работы event loop
+
     async def main():
         app = ApplicationBuilder().token(TOKEN).build()
         await app.bot.delete_webhook(drop_pending_updates=True)
