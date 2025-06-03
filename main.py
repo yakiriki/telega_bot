@@ -1,23 +1,22 @@
 import logging
 import os
 import sqlite3
+import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, Document
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+    ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 )
 import xml.etree.ElementTree as ET
-from db.database import (
-    init_db, insert_expense, get_summary, delete_item,
-    delete_receipt, get_all_expenses
-)
+
+from db.database import init_db, insert_expense, get_summary, delete_item, delete_receipt, get_all_expenses
 from utils.parser import parse_xml
 from utils.categorizer import categorize_item
 
-TOKEN = os.getenv("BOT_TOKEN")
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+TOKEN = os.getenv("BOT_TOKEN")
 
 init_db()
 
@@ -30,7 +29,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "➕ /add назва,ціна,категорія — вручну додати\n"
         "🗑️ /delete_item ID — видалити товар\n"
         "🗑️ /delete_receipt ID — видалити чек\n"
-        "🐞 /debug — переглянути всі записи"
+        "🐞 /debug — показати всі збережені позиції"
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -134,19 +133,18 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     rows = get_all_expenses(user_id)
     if not rows:
-        await update.message.reply_text("База порожня.")
+        await update.message.reply_text("Нічого не знайдено.")
         return
-    reply = ["📦 База:"]
-    for row in rows:
-        reply.append(f"#{row[0]} | {row[2]} — {row[3]:.2f} грн | {row[4]} | чек: {row[6]}")
-    await update.message.reply_text("\n".join(reply[:50]))
+    reply = ["🐞 Всі витрати:"]
+    for r in rows[-20:]:
+        reply.append(f"{r[0]}: {r[2]} — {r[3]:.2f} грн ({r[4]}) чек {r[6]}")
+    await update.message.reply_text("\n".join(reply))
 
-if __name__ == "__main__":
-    from telegram import Bot
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
-    bot = Bot(TOKEN)
-    import asyncio
-    asyncio.run(bot.delete_webhook())
+
+    await app.bot.delete_webhook(drop_pending_updates=True)
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("summary_day", summary_day))
     app.add_handler(CommandHandler("summary_week", summary_week))
@@ -157,5 +155,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("debug", debug))
     app.add_handler(MessageHandler(filters.Document.XML, handle_file))
     app.add_handler(MessageHandler(filters.TEXT, handle_text))
+
     print("✅ Бот запущено")
-    app.run_polling()
+    await app.run_polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())
