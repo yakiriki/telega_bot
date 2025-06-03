@@ -8,7 +8,7 @@ from telegram.ext import (
 )
 import xml.etree.ElementTree as ET
 
-from db.database import init_db, insert_expense, get_summary, delete_item, delete_receipt
+from db.database import init_db, insert_expense, get_summary, delete_item, delete_receipt, conn, cur
 from utils.parser import parse_xml
 from utils.categorizer import categorize_item
 
@@ -28,6 +28,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "➕ /add назва,ціна,категорія — вручну додати\n"
         "🗑️ /delete_item ID — видалити товар\n"
         "🗑️ /delete_receipt ID — видалити чек\n"
+        "🔍 /debug — показати всі записи"
     )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -127,6 +128,18 @@ async def delete_receipt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except:
         await update.message.reply_text("Формат: /delete_receipt ID")
 
+async def debug_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    cur.execute("SELECT id, name, price, date, receipt_id FROM expenses WHERE user_id = ?", (user_id,))
+    rows = cur.fetchall()
+    if not rows:
+        await update.message.reply_text("База порожня.")
+        return
+    reply = ["🔍 Дані в базі:"]
+    for r in rows[:20]:  # обмеження для довжини повідомлення
+        reply.append(f"{r[0]}. {r[1]} — {r[2]:.2f} грн | {r[3]} | чек: {r[4]}")
+    await update.message.reply_text("\n".join(reply))
+
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -136,6 +149,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("add", add))
     app.add_handler(CommandHandler("delete_item", delete_item_cmd))
     app.add_handler(CommandHandler("delete_receipt", delete_receipt_cmd))
+    app.add_handler(CommandHandler("debug", debug_data))
     app.add_handler(MessageHandler(filters.Document.XML, handle_file))
     app.add_handler(MessageHandler(filters.TEXT, handle_text))
     print("✅ Бот запущено")
