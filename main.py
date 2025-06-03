@@ -102,4 +102,5 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^https?://"), handle_url))
 
     logger.info("Бот запущено...")
+    await app.bot.delete_webhook(drop_pending_updates=True)
     app.run_polling()
