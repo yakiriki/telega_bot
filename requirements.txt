@@ -3,3 +3,5 @@ pillow
 pytesseract
 telegram
 aiohttp
+httpx
+beautifulsoup4
