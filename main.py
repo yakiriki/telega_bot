@@ -8,10 +8,14 @@ from telegram.ext import (
 )
 import xml.etree.ElementTree as ET
 import asyncio
+import nest_asyncio  # ✅ Додаємо
 
 from db.database import init_db, insert_expense, get_summary, delete_item, delete_receipt, get_all_expenses
 from utils.parser import parse_xml
 from utils.categorizer import categorize_item
+
+# ✅ Патчимо активний loop, щоб уникнути помилок
+nest_asyncio.apply()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -140,8 +144,7 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply.append(f"{r[0]}: {r[2]} — {r[3]:.2f} грн ({r[4]}) чек {r[6]}")
     await update.message.reply_text("\n".join(reply))
 
-# 🔧 БЕЗ asyncio.run()
-async def main_async():
+async def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     await app.bot.delete_webhook(drop_pending_updates=True)
@@ -160,7 +163,5 @@ async def main_async():
     print("✅ Бот запущено")
     await app.run_polling()
 
-# 🔁 Запускаємо як background task (НЕ через asyncio.run)
 if __name__ == "__main__":
-    asyncio.get_event_loop().create_task(main_async())
-    asyncio.get_event_loop().run_forever()
+    asyncio.run(main())
