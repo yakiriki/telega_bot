@@ -1,7 +1,6 @@
 python-telegram-bot==20.3
 pillow
 pytesseract
-telegram
-aiohttp
 httpx
 beautifulsoup4
+nest_asyncio
