@@ -1,13 +1,13 @@
 import logging
 import os
 import sqlite3
-import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, Document
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 )
 import xml.etree.ElementTree as ET
+import asyncio
 
 from db.database import init_db, insert_expense, get_summary, delete_item, delete_receipt, get_all_expenses
 from utils.parser import parse_xml
@@ -140,7 +140,8 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply.append(f"{r[0]}: {r[2]} — {r[3]:.2f} грн ({r[4]}) чек {r[6]}")
     await update.message.reply_text("\n".join(reply))
 
-async def main():
+# 🔧 БЕЗ asyncio.run()
+async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
 
     await app.bot.delete_webhook(drop_pending_updates=True)
@@ -159,5 +160,7 @@ async def main():
     print("✅ Бот запущено")
     await app.run_polling()
 
+# 🔁 Запускаємо як background task (НЕ через asyncio.run)
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.get_event_loop().create_task(main_async())
+    asyncio.get_event_loop().run_forever()
