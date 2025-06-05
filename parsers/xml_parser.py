@@ -2,7 +2,7 @@ import requests
 from lxml import etree
 from io import BytesIO
 from datetime import datetime
-from bot.utils.categories import categorize
+from utils.categories import categorize
 
 def parse_xml_file(file_path):
     with open(file_path, "rb") as f:
