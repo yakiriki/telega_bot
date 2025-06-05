@@ -1,0 +1,4 @@
+python-telegram-bot==20.8
+lxml==5.2.1
+python-dateutil==2.9.0.post0
+requests==2.31.0
