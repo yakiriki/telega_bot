@@ -23,6 +23,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 WAITING_NAME, WAITING_PRICE = range(2)
+# manual_data удалён — теперь используем context.user_data
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -75,7 +76,6 @@ async def send_summary(update, items, check_id):
     text += f"\n💰 Всього: {total / 100:.2f} грн"
     await update.message.reply_text(text)
 
-# === /manual команда с использованием context.user_data ===
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введіть назву товару:")
     return WAITING_NAME
@@ -102,12 +102,7 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "sum": int(price * 100)
     }
     check_id = save_items_to_db([item], DB_PATH)
-
-    await update.message.reply_text(
-        f"✅ Додано: {name} ({category}) — {price:.2f} грн",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    context.user_data.pop('manual_name', None)
+    await update.message.reply_text(f"✅ Додано: {name} ({category}) — {price:.2f} грн", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,3 +182,44 @@ def main():
     app.add_handler(CommandHandler("report_day", report_day))
     app.add_handler(CommandHandler("report_week", report_week))
     app.add_handler(CommandHandler("report_mounth", report_mounth))
+    app.add_handler(CommandHandler("report_all", report_all))
+    app.add_handler(CommandHandler("debug", debug))
+    app.add_handler(CommandHandler("delete_check", delete_check))
+    app.add_handler(CommandHandler("delete_item", delete_item))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("manual", manual_start)],
+        states={
+            WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name)],
+            WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[MessageHandler(filters.TEXT & filters.Regex(r"^Введіть ID чеку"), delete_check)],
+        states={"DELETE_CHECK": [MessageHandler(filters.TEXT, delete_check_confirm)]},
+        fallbacks=[],
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[MessageHandler(filters.TEXT & filters.Regex(r"^Введіть ID товару"), delete_item)],
+        states={"DELETE_ITEM": [MessageHandler(filters.TEXT, delete_item_confirm)]},
+        fallbacks=[],
+    ))
+
+    app.add_handler(ConversationHandler(
+        entry_points=[MessageHandler(filters.TEXT & filters.Regex(r"^Введіть дату з"), report_all)],
+        states={
+            "REPORT_ALL_FROM": [MessageHandler(filters.TEXT, report_all_from)],
+            "REPORT_ALL_TO": [MessageHandler(filters.TEXT, report_all_to)],
+        },
+        fallbacks=[],
+    ))
+
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
