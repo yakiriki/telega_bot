@@ -17,7 +17,7 @@ from utils.db import init_db, save_items_to_db, get_report, get_debug_info, dele
 from utils.categories import categorize
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DB_PATH = "expenses.db"
+DB_PATH = "/data/expenses.db"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
