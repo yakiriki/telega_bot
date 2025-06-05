@@ -48,4 +48,4 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.document.get_file()
     file_path = f"/tmp/{file.file_id}.xml"
     await file.download_to_drive(file_path)
-    items = parse_xml_file(file
+    items = parse_xml_file(file)
