@@ -24,8 +24,6 @@ logger = logging.getLogger(__name__)
 
 WAITING_NAME, WAITING_PRICE = range(2)
 
-# Удаляем глобальную переменную manual_data, теперь будем использовать context.user_data
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "👋 Привіт! Я бот для обліку витрат по чеках.\n\n"
@@ -55,11 +53,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    # Проверяем, что мы не находимся в состоянии ConversationHandler для manual
-    # Но если ConversationHandler работает корректно, этот хендлер вообще не должен срабатывать в этом случае.
-    # Тем не менее, можно добавить дополнительную проверку:
     if context.user_data.get("manual_in_progress"):
-        # Если вдруг здесь, значит что-то не так с ConversationHandler, просто игнорируем или просим продолжить диалог
         await update.message.reply_text("❗ Продовжіть введення назви або ціни товару, або введіть /cancel для скасування.")
         return
 
@@ -86,12 +80,11 @@ async def send_summary(update, items, check_id):
     await update.message.reply_text(text)
 
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["manual_in_progress"] = True  # помічаємо, що ручне введення почалося
+    context.user_data["manual_in_progress"] = True
     await update.message.reply_text("Введіть назву товару:")
     return WAITING_NAME
 
 async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Сохраняем имя товара в context.user_data
     context.user_data['manual_data'] = {'name': update.message.text}
     await update.message.reply_text("Введіть суму в грн (наприклад, 23.50):")
     return WAITING_PRICE
@@ -116,7 +109,6 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     check_id = save_items_to_db([item], DB_PATH)
     await update.message.reply_text(f"✅ Додано: {name} ({category}) — {price:.2f} грн", reply_markup=ReplyKeyboardRemove())
 
-    # Очищаем данные после добавления
     context.user_data.pop('manual_data', None)
     context.user_data.pop('manual_in_progress', None)
 
@@ -127,8 +119,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop('manual_in_progress', None)
     await update.message.reply_text("Скасовано.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
-
-# остальные функции оставляем без изменений...
 
 async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_report(update, period="day")
@@ -203,13 +193,9 @@ def main():
     app.add_handler(CommandHandler("report_day", report_day))
     app.add_handler(CommandHandler("report_week", report_week))
     app.add_handler(CommandHandler("report_mounth", report_mounth))
-    app.add_handler(CommandHandler("report_all", report_all))
     app.add_handler(CommandHandler("debug", debug))
-    app.add_handler(CommandHandler("delete_check", delete_check))
-    app.add_handler(CommandHandler("delete_item", delete_item))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    
-    # Сначала ConversationHandler для /manual
+
+    # ConversationHandler обязательно ДО handle_text
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("manual", manual_start)],
         states={
@@ -219,7 +205,6 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
-    # Остальные ConversationHandler'ы для удаления чеков, товаров и отчётов
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("delete_check", delete_check)],
         states={"DELETE_CHECK": [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm)]},
@@ -241,7 +226,8 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
-    # Общий текстовый обработчик — последний, чтобы не перехватывать сообщения внутри разговоров
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.run_polling()
