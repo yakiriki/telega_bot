@@ -23,7 +23,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 WAITING_NAME, WAITING_PRICE = range(2)
-# manual_data удалён — теперь используем context.user_data
+
+# Удаляем глобальную переменную manual_data, теперь будем использовать context.user_data
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -54,6 +55,14 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    # Проверяем, что мы не находимся в состоянии ConversationHandler для manual
+    # Но если ConversationHandler работает корректно, этот хендлер вообще не должен срабатывать в этом случае.
+    # Тем не менее, можно добавить дополнительную проверку:
+    if context.user_data.get("manual_in_progress"):
+        # Если вдруг здесь, значит что-то не так с ConversationHandler, просто игнорируем или просим продолжить диалог
+        await update.message.reply_text("❗ Продовжіть введення назви або ціни товару, або введіть /cancel для скасування.")
+        return
+
     if text.lower().startswith("http"):
         items = parse_xml_url(text)
     elif "<?xml" in text:
@@ -77,11 +86,13 @@ async def send_summary(update, items, check_id):
     await update.message.reply_text(text)
 
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["manual_in_progress"] = True  # помічаємо, що ручне введення почалося
     await update.message.reply_text("Введіть назву товару:")
     return WAITING_NAME
 
 async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['manual_name'] = update.message.text
+    # Сохраняем имя товара в context.user_data
+    context.user_data['manual_data'] = {'name': update.message.text}
     await update.message.reply_text("Введіть суму в грн (наприклад, 23.50):")
     return WAITING_PRICE
 
@@ -92,7 +103,8 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Невірна сума. Спробуйте ще:")
         return WAITING_PRICE
 
-    name = context.user_data.get("manual_name", "Товар")
+    manual_data = context.user_data.get('manual_data', {})
+    name = manual_data.get("name", "Товар")
     category = categorize(name)
     now = datetime.now()
     item = {
@@ -103,11 +115,20 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     check_id = save_items_to_db([item], DB_PATH)
     await update.message.reply_text(f"✅ Додано: {name} ({category}) — {price:.2f} грн", reply_markup=ReplyKeyboardRemove())
+
+    # Очищаем данные после добавления
+    context.user_data.pop('manual_data', None)
+    context.user_data.pop('manual_in_progress', None)
+
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop('manual_data', None)
+    context.user_data.pop('manual_in_progress', None)
     await update.message.reply_text("Скасовано.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
+
+# остальные функции оставляем без изменений...
 
 async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_report(update, period="day")
@@ -187,8 +208,8 @@ def main():
     app.add_handler(CommandHandler("delete_check", delete_check))
     app.add_handler(CommandHandler("delete_item", delete_item))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
+    
+    # Сначала ConversationHandler для /manual
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("manual", manual_start)],
         states={
@@ -198,26 +219,30 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
+    # Остальные ConversationHandler'ы для удаления чеков, товаров и отчётов
     app.add_handler(ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & filters.Regex(r"^Введіть ID чеку"), delete_check)],
-        states={"DELETE_CHECK": [MessageHandler(filters.TEXT, delete_check_confirm)]},
-        fallbacks=[],
+        entry_points=[CommandHandler("delete_check", delete_check)],
+        states={"DELETE_CHECK": [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
     app.add_handler(ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & filters.Regex(r"^Введіть ID товару"), delete_item)],
-        states={"DELETE_ITEM": [MessageHandler(filters.TEXT, delete_item_confirm)]},
-        fallbacks=[],
+        entry_points=[CommandHandler("delete_item", delete_item)],
+        states={"DELETE_ITEM": [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm)]},
+        fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
     app.add_handler(ConversationHandler(
-        entry_points=[MessageHandler(filters.TEXT & filters.Regex(r"^Введіть дату з"), report_all)],
+        entry_points=[CommandHandler("report_all", report_all)],
         states={
-            "REPORT_ALL_FROM": [MessageHandler(filters.TEXT, report_all_from)],
-            "REPORT_ALL_TO": [MessageHandler(filters.TEXT, report_all_to)],
+            "REPORT_ALL_FROM": [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
+            "REPORT_ALL_TO": [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)],
         },
-        fallbacks=[],
+        fallbacks=[CommandHandler("cancel", cancel)],
     ))
+
+    # Общий текстовый обработчик — последний, чтобы не перехватывать сообщения внутри разговоров
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.run_polling()
 
