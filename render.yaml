@@ -1,9 +1,0 @@
-services:
-  - type: web
-    name: telegram-receipt-bot
-    env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python3 bot/bot.py"
-    envVars:
-      - key: BOT_TOKEN
-        sync: false
