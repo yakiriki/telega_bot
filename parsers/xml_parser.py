@@ -35,40 +35,39 @@ def parse_xml_bytes(content):
 
 def parse_format_atb(root):
     items = []
-    date = extract_timestamp(root)
+    discounts = {}
 
-    # Крок 1: зібрати всі товари (елементи P) з індексацією по N
-    raw_items = {}
+    # Збираємо знижки (елементи D)
+    for d in root.xpath(".//D"):
+        name = d.attrib.get("NM", "").strip()
+        sm = int(d.attrib.get("SM", "0"))
+        if name:
+            discounts[name] = discounts.get(name, 0) + sm
+
+    # Збираємо товари (елементи P)
     for p in root.xpath(".//P"):
-        index = p.attrib.get("N")
-        if not index:
-            continue
-        name = p.attrib.get("NM", "Невідомо")
+        name = p.attrib.get("NM", "Невідомо").strip()
         summ = int(p.attrib.get("SM", "0"))
-        raw_items[index] = {
+
+        # Віднімаємо знижку, якщо є
+        discount = discounts.get(name, 0)
+        final_sum = summ - discount
+
+        date = extract_timestamp(root)
+
+        items.append({
             "name": name,
-            "sum": summ,
+            "sum": max(final_sum, 0),
             "date": date,
             "category": categorize(name)
-        }
+        })
 
-    # Крок 2: знайти всі знижки (елементи D) і застосувати
-    for d in root.xpath(".//D"):
-        ni = d.attrib.get("NI")  # номер елемента P
-        discount = int(d.attrib.get("SM", "0"))
-        if ni in raw_items:
-            raw_items[ni]["sum"] -= discount
-            if raw_items[ni]["sum"] < 0:
-                raw_items[ni]["sum"] = 0
-
-    # Крок 3: сформувати результат
-    items = list(raw_items.values())
     return items
 
 def parse_format_tax(root):
     items = []
     for row in root.xpath(".//CHECKBODY/ROW"):
-        name = row.findtext("NAME", "Невідомо")
+        name = row.findtext("NAME", "Невідомо").strip()
         summ = float(row.findtext("COST", "0")) * 100
         date_raw = root.findtext(".//ORDERDATE", "")
         date = format_date(date_raw)
@@ -81,4 +80,17 @@ def parse_format_tax(root):
     return items
 
 def extract_timestamp(root):
-    ts = r
+    ts = root.xpath(".//TS")
+    if ts:
+        raw = ts[0].text
+        try:
+            return datetime.strptime(raw, "%Y%m%d%H%M%S").strftime("%Y-%m-%d")
+        except:
+            pass
+    return datetime.now().strftime("%Y-%m-%d")
+
+def format_date(date_raw):
+    try:
+        return datetime.strptime(date_raw, "%d%m%Y").strftime("%Y-%m-%d")
+    except:
+        return datetime.now().strftime("%Y-%m-%d")
