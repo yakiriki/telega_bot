@@ -2,7 +2,7 @@ import requests
 from lxml import etree
 from io import BytesIO
 from datetime import datetime
-from utils.categories import categorize
+from utils.categories import categorize  # або заміни на: lambda name: "Інше"
 
 def parse_xml_file(file_path):
     with open(file_path, "rb") as f:
@@ -34,29 +34,34 @@ def parse_xml_bytes(content):
         return []
 
 def parse_format_atb(root):
-    # Сначала собираем товары в словарь по номеру N
-    items_dict = {}
+    date = extract_timestamp(root)
+    items_by_n = {}
+
+    # 1. Зчитуємо всі позиції <P>
     for p in root.xpath(".//P"):
-        n = p.attrib.get("N")
+        number = int(p.attrib.get("N", 0))
         name = p.attrib.get("NM", "Невідомо")
         summ = int(p.attrib.get("SM", "0"))
-        date = extract_timestamp(root)
-        items_dict[n] = {
+
+        items_by_n[number] = {
             "name": name,
             "sum": summ,
+            "discount": 0,
             "date": date,
             "category": categorize(name)
         }
 
-    # Теперь применяем скидки из элементов D по NI (номер товара)
+    # 2. Обробляємо знижки <D>
     for d in root.xpath(".//D"):
-        ni = d.attrib.get("NI")
+        ni = int(d.attrib.get("NI", 0))
         discount = int(d.attrib.get("SM", "0"))
-        if ni in items_dict:
-            items_dict[ni]["sum"] -= discount
+        if ni in items_by_n:
+            items_by_n[ni]["sum"] -= discount
+            items_by_n[ni]["discount"] += discount
+            if items_by_n[ni]["sum"] < 0:
+                items_by_n[ni]["sum"] = 0
 
-    # Превращаем словарь обратно в список
-    return list(items_dict.values())
+    return list(items_by_n.values())
 
 def parse_format_tax(root):
     items = []
@@ -68,6 +73,7 @@ def parse_format_tax(root):
         items.append({
             "name": name,
             "sum": int(summ),
+            "discount": 0,
             "date": date,
             "category": categorize(name)
         })
