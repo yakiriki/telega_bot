@@ -23,7 +23,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 WAITING_NAME, WAITING_PRICE = range(2)
-manual_data = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -76,6 +75,115 @@ async def send_summary(update, items, check_id):
     text += f"\n💰 Всього: {total / 100:.2f} грн"
     await update.message.reply_text(text)
 
+# === /manual команда с использованием context.user_data ===
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    manual_data.clear()  # Очистить старые данные
-    a
+    await update.message.reply_text("Введіть назву товару:")
+    return WAITING_NAME
+
+async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['manual_name'] = update.message.text
+    await update.message.reply_text("Введіть суму в грн (наприклад, 23.50):")
+    return WAITING_PRICE
+
+async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        price = float(update.message.text.replace(",", "."))
+    except ValueError:
+        await update.message.reply_text("❌ Невірна сума. Спробуйте ще:")
+        return WAITING_PRICE
+
+    name = context.user_data.get("manual_name", "Товар")
+    category = categorize(name)
+    now = datetime.now()
+    item = {
+        "date": now.strftime("%Y-%m-%d"),
+        "name": name,
+        "category": category,
+        "sum": int(price * 100)
+    }
+    check_id = save_items_to_db([item], DB_PATH)
+
+    await update.message.reply_text(
+        f"✅ Додано: {name} ({category}) — {price:.2f} грн",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    context.user_data.pop('manual_name', None)
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Скасовано.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_report(update, period="day")
+
+async def report_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_report(update, period="week")
+
+async def report_mounth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_report(update, period="month")
+
+async def report_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть дату з (у форматі РРРР-ММ-ДД):")
+    return "REPORT_ALL_FROM"
+
+async def report_all_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["from_date"] = update.message.text.strip()
+    await update.message.reply_text("Введіть дату по (у форматі РРРР-ММ-ДД):")
+    return "REPORT_ALL_TO"
+
+async def report_all_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from_date = context.user_data.get("from_date")
+    to_date = update.message.text.strip()
+    await send_report(update, period="custom", from_date=from_date, to_date=to_date)
+    return ConversationHandler.END
+
+async def send_report(update, period, from_date=None, to_date=None):
+    report = get_report(DB_PATH, period, from_date, to_date)
+    if not report:
+        await update.message.reply_text("Немає даних за вказаний період.")
+        return
+    text = "📊 Звіт:\n"
+    total = 0
+    for cat, s in report.items():
+        text += f"• {cat}: {s / 100:.2f} грн\n"
+        total += s
+    text += f"\n💰 Всього: {total / 100:.2f} грн"
+    await update.message.reply_text(text)
+
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stats = get_debug_info(DB_PATH)
+    msg = f"📦 Чеків: {stats['checks']}\n🛒 Товарів: {stats['items']}"
+    await update.message.reply_text(msg)
+
+async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть ID чеку для видалення:")
+    return "DELETE_CHECK"
+
+async def delete_check_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    check_id = update.message.text.strip()
+    success = delete_check_by_id(DB_PATH, check_id)
+    msg = "✅ Чек видалено." if success else "❌ Не знайдено чек."
+    await update.message.reply_text(msg)
+    return ConversationHandler.END
+
+async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть ID товару для видалення:")
+    return "DELETE_ITEM"
+
+async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    item_id = update.message.text.strip()
+    success = delete_item_by_id(DB_PATH, item_id)
+    msg = "✅ Товар видалено." if success else "❌ Не знайдено товар."
+    await update.message.reply_text(msg)
+    return ConversationHandler.END
+
+def main():
+    init_db(DB_PATH)
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("info", info))
+    app.add_handler(CommandHandler("report_day", report_day))
+    app.add_handler(CommandHandler("report_week", report_week))
+    app.add_handler(CommandHandler("report_mounth", report_mounth))
