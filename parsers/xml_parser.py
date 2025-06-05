@@ -35,32 +35,28 @@ def parse_xml_bytes(content):
 
 def parse_format_atb(root):
     items = []
-    discounts = {}
+    all_tags = root.xpath(".//P | .//D")  # усі позиції: товари (P) і знижки (D)
+    date = extract_timestamp(root)
 
-    # Збираємо знижки (елементи D)
-    for d in root.xpath(".//D"):
-        name = d.attrib.get("NM", "").strip()
-        sm = int(d.attrib.get("SM", "0"))
-        if name:
-            discounts[name] = discounts.get(name, 0) + sm
+    current_discount = 0
 
-    # Збираємо товари (елементи P)
-    for p in root.xpath(".//P"):
-        name = p.attrib.get("NM", "Невідомо").strip()
-        summ = int(p.attrib.get("SM", "0"))
+    for tag in all_tags:
+        if tag.tag == "D":
+            # знижка застосовується до попереднього товару
+            sm = int(tag.attrib.get("SM", "0"))
+            current_discount += sm
+        elif tag.tag == "P":
+            name = tag.attrib.get("NM", "Невідомо").strip()
+            summ = int(tag.attrib.get("SM", "0"))
+            final_sum = summ - current_discount
+            current_discount = 0  # скидаємо після застосування
 
-        # Віднімаємо знижку, якщо є
-        discount = discounts.get(name, 0)
-        final_sum = summ - discount
-
-        date = extract_timestamp(root)
-
-        items.append({
-            "name": name,
-            "sum": max(final_sum, 0),
-            "date": date,
-            "category": categorize(name)
-        })
+            items.append({
+                "name": name,
+                "sum": max(final_sum, 0),
+                "date": date,
+                "category": categorize(name)
+            })
 
     return items
 
@@ -87,10 +83,4 @@ def extract_timestamp(root):
             return datetime.strptime(raw, "%Y%m%d%H%M%S").strftime("%Y-%m-%d")
         except:
             pass
-    return datetime.now().strftime("%Y-%m-%d")
-
-def format_date(date_raw):
-    try:
-        return datetime.strptime(date_raw, "%d%m%Y").strftime("%Y-%m-%d")
-    except:
-        return datetime.now().strftime("%Y-%m-%d")
+    return datetime.now().strft
