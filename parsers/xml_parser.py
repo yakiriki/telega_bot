@@ -34,36 +34,34 @@ def parse_xml_bytes(content):
         return []
 
 def parse_format_atb(root):
-    items = []
-    all_tags = root.xpath(".//P | .//D")  # усі позиції: товари (P) і знижки (D)
-    date = extract_timestamp(root)
+    # Сначала собираем товары в словарь по номеру N
+    items_dict = {}
+    for p in root.xpath(".//P"):
+        n = p.attrib.get("N")
+        name = p.attrib.get("NM", "Невідомо")
+        summ = int(p.attrib.get("SM", "0"))
+        date = extract_timestamp(root)
+        items_dict[n] = {
+            "name": name,
+            "sum": summ,
+            "date": date,
+            "category": categorize(name)
+        }
 
-    current_discount = 0
+    # Теперь применяем скидки из элементов D по NI (номер товара)
+    for d in root.xpath(".//D"):
+        ni = d.attrib.get("NI")
+        discount = int(d.attrib.get("SM", "0"))
+        if ni in items_dict:
+            items_dict[ni]["sum"] -= discount
 
-    for tag in all_tags:
-        if tag.tag == "D":
-            # знижка застосовується до попереднього товару
-            sm = int(tag.attrib.get("SM", "0"))
-            current_discount += sm
-        elif tag.tag == "P":
-            name = tag.attrib.get("NM", "Невідомо").strip()
-            summ = int(tag.attrib.get("SM", "0"))
-            final_sum = summ - current_discount
-            current_discount = 0  # скидаємо після застосування
-
-            items.append({
-                "name": name,
-                "sum": max(final_sum, 0),
-                "date": date,
-                "category": categorize(name)
-            })
-
-    return items
+    # Превращаем словарь обратно в список
+    return list(items_dict.values())
 
 def parse_format_tax(root):
     items = []
     for row in root.xpath(".//CHECKBODY/ROW"):
-        name = row.findtext("NAME", "Невідомо").strip()
+        name = row.findtext("NAME", "Невідомо")
         summ = float(row.findtext("COST", "0")) * 100
         date_raw = root.findtext(".//ORDERDATE", "")
         date = format_date(date_raw)
@@ -83,4 +81,10 @@ def extract_timestamp(root):
             return datetime.strptime(raw, "%Y%m%d%H%M%S").strftime("%Y-%m-%d")
         except:
             pass
-    return datetime.now().strft
+    return datetime.now().strftime("%Y-%m-%d")
+
+def format_date(date_raw):
+    try:
+        return datetime.strptime(date_raw, "%d%m%Y").strftime("%Y-%m-%d")
+    except:
+        return datetime.now().strftime("%Y-%m-%d")
