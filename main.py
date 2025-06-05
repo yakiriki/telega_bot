@@ -12,9 +12,9 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-from bot.parsers.xml_parser import parse_xml_file, parse_xml_string, parse_xml_url
-from bot.utils.db import init_db, save_items_to_db, get_report, get_debug_info, delete_check_by_id, delete_item_by_id
-from bot.utils.categories import categorize
+from parsers.xml_parser import parse_xml_file, parse_xml_string, parse_xml_url
+from utils.db import init_db, save_items_to_db, get_report, get_debug_info, delete_check_by_id, delete_item_by_id
+from utils.categories import categorize
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DB_PATH = "expenses.db"
