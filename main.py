@@ -22,9 +22,9 @@ DB_PATH = "/data/expenses.db"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-WAITING_NAME, WAITING_PRICE = range(2)
+WAITING_NAME, WAITING_PRICE, DELETE_CHECK_ID, DELETE_ITEM_ID, REPORT_FROM, REPORT_TO = range(5)
 
-# Кнопка Info остаётся доступной всегда
+# Клавіатура з кнопкою Info
 info_keyboard = ReplyKeyboardMarkup(
     [["💡 Info"]],
     resize_keyboard=True,
@@ -39,12 +39,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/report_day — звіт за сьогодні\n"
         "/report_week — звіт за тиждень\n"
         "/report_mounth — звіт за місяць\n"
-        "/report_all — звіт за вибраний період\n"
+        "/report_all — звіт за період\n"
         "/debug — технічна інформація\n"
         "/manual — додати товар вручну\n"
         "/delete_check — видалити чек\n"
         "/delete_item — видалити товар\n\n"
-        "Натисніть кнопку «💡 Info», щоб побачити список команд."
+        "Натисніть кнопку «💡 Info".
     )
     await update.message.reply_text(msg, reply_markup=info_keyboard)
 
@@ -61,156 +61,112 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    # Если нажата кнопка Info
     if text == "💡 Info":
         await info(update, context)
         return
-
-    # Если мы в процессе ручного ввода
-    if context.user_data.get("manual_in_progress"):
-        await update.message.reply_text(
-            "❗ Продовжіть введення назви або ціни товару, або введіть /cancel для скасування.",
-            reply_markup=info_keyboard
-        )
-        return
-
-    # Обычные чек-файлы
-    if text.lower().startswith("http"):
-        items = parse_xml_url(text)
-    elif "<?xml" in text:
-        items = parse_xml_string(text)
-    else:
-        await update.message.reply_text(
-            "❌ Це не схоже на XML або URL.\nСпробуйте ще.",
-            reply_markup=info_keyboard
-        )
-        return
-
-    check_id = save_items_to_db(items, DB_PATH)
-    await send_summary(update, items, check_id)
+    await update.message.reply_text(
+        "❌ Це не схоже на XML або URL.\nСпробуйте ще.",
+        reply_markup=info_keyboard
+    )
 
 async def send_summary(update, items, check_id):
     if not items:
-        await update.message.reply_text("❌ Не вдалося знайти товари в цьому чеку.", reply_markup=info_keyboard)
+        await update.message.reply_text("❌ Не знайдено товарів.", reply_markup=info_keyboard)
         return
     text = f"✅ Додано чек #{check_id}:\n"
     total = 0
     for item in items:
-        text += f"• {item['name']} ({item['category']}) — {item['sum'] / 100:.2f} грн\n"
+        text += f"• {item['name']} ({item['category']}) — {item['sum']/100:.2f} грн\n"
         total += item['sum']
-    text += f"\n💰 Всього: {total / 100:.2f} грн"
+    text += f"\n💰 Всього: {total/100:.2f} грн"
     await update.message.reply_text(text, reply_markup=info_keyboard)
 
-# --- ручной ввод ---
+# Manual entry
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["manual_in_progress"] = True
     await update.message.reply_text("Введіть назву товару:", reply_markup=info_keyboard)
     return WAITING_NAME
-
 async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['manual_data'] = {'name': update.message.text}
-    await update.message.reply_text("Введіть суму в грн (наприклад, 23.50):", reply_markup=info_keyboard)
+    context.user_data['manual_name'] = update.message.text
+    await update.message.reply_text("Введіть суму в грн:", reply_markup=info_keyboard)
     return WAITING_PRICE
-
 async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         price = float(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("❌ Невірна сума. Спробуйте ще:", reply_markup=info_keyboard)
+        await update.message.reply_text("❌ Невірна сума.", reply_markup=info_keyboard)
         return WAITING_PRICE
-
-    manual_data = context.user_data.pop('manual_data', {})
-    name = manual_data.get("name", "Товар")
+    name = context.user_data.pop('manual_name')
     category = categorize(name)
-    now = datetime.now()
-    item = {
-        "date": now.strftime("%Y-%m-%d"),
-        "name": name,
-        "category": category,
-        "sum": int(price * 100)
-    }
+    now = datetime.now().strftime("%Y-%m-%d")
+    item = {"date": now, "name": name, "category": category, "sum": int(price*100)}
     save_items_to_db([item], DB_PATH)
-    await update.message.reply_text(f"✅ Додано: {name} ({category}) — {price:.2f} грн", reply_markup=info_keyboard)
-    context.user_data.pop('manual_in_progress', None)
+    await update.message.reply_text(f"✅ Додано вручну: {name} ({category}) — {price:.2f} грн", reply_markup=info_keyboard)
     return ConversationHandler.END
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.pop('manual_data', None)
-    context.user_data.pop('manual_in_progress', None)
     await update.message.reply_text("Скасовано.", reply_markup=info_keyboard)
     return ConversationHandler.END
 
-# --- отчёты ---
-async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_report(update, period="day")
-
-async def report_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_report(update, period="week")
-
-async def report_mounth(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_report(update, period="month")
-
-async def report_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введіть дату з (у форматі РРРР-ММ-ДД):", reply_markup=info_keyboard)
-    return "REPORT_ALL_FROM"
-
+# Reports
+async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE): await send_report(update, 'day')
+async def report_week(update: Update, context: ContextTypes.DEFAULT_TYPE): await send_report(update, 'week')
+async def report_mounth(update: Update, context: ContextTypes.DEFAULT_TYPE): await send_report(update, 'month')
+async def report_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть дату з (РРРР-ММ-ДД):", reply_markup=info_keyboard)
+    return REPORT_FROM
 async def report_all_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["from_date"] = update.message.text.strip()
-    await update.message.reply_text("Введіть дату по (у форматі РРРР-ММ-ДД):", reply_markup=info_keyboard)
-    return "REPORT_ALL_TO"
-
+    context.user_data['from_date'] = update.message.text.strip()
+    await update.message.reply_text("Введіть дату по (РРРР-ММ-ДД):", reply_markup=info_keyboard)
+    return REPORT_TO
 async def report_all_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from_date = context.user_data.get("from_date")
-    to_date = update.message.text.strip()
-    await send_report(update, period="custom", from_date=from_date, to_date=to_date)
+    report = get_report(DB_PATH, 'custom', context.user_data['from_date'], update.message.text.strip())
+    if not report:
+        await update.message.reply_text("Немає даних.", reply_markup=info_keyboard)
+    else:
+        text="📊 Звіт:"
+        total=0
+        for c,s in report.items(): text+=f"\n• {c}: {s/100:.2f} грн"; total+=s
+        await update.message.reply_text(text+f"\n💰 {total/100:.2f} грн", reply_markup=info_keyboard)
     return ConversationHandler.END
+
+# Delete
+async def delete_check_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть ID чеку для видалення:", reply_markup=info_keyboard)
+    return DELETE_CHECK_ID
+async def delete_check_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    success = delete_check_by_id(DB_PATH, update.message.text.strip())
+    await update.message.reply_text("✅ Видалено" if success else "❌ Не знайдено чек", reply_markup=info_keyboard)
+    return ConversationHandler.END
+async def delete_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть ID товару для видалення:", reply_markup=info_keyboard)
+    return DELETE_ITEM_ID
+async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    success = delete_item_by_id(DB_PATH, update.message.text.strip())
+    await update.message.reply_text("✅ Видалено" if success else "❌ Не знайдено товар", reply_markup=info_keyboard)
+    return ConversationHandler.END
+
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stats = get_debug_info(DB_PATH)
+    await update.message.reply_text(f"Чеки: {stats['checks']}, Товари: {stats['items']}", reply_markup=info_keyboard)
 
 async def send_report(update, period, from_date=None, to_date=None):
     report = get_report(DB_PATH, period, from_date, to_date)
     if not report:
-        await update.message.reply_text("Немає даних за вказаний період.", reply_markup=info_keyboard)
+        await update.message.reply_text("Немає даних.", reply_markup=info_keyboard)
         return
-    text = "📊 Звіт:\n"
+    text = "📊 Звіт:"
     total = 0
     for cat, s in report.items():
-        text += f"• {cat}: {s / 100:.2f} грн\n"
+        text += f"\n• {cat}: {s/100:.2f} грн"
         total += s
-    text += f"\n💰 Всього: {total / 100:.2f} грн"
+    text += f"\n💰 Всього: {total/100:.2f} грн"
     await update.message.reply_text(text, reply_markup=info_keyboard)
 
-async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    stats = get_debug_info(DB_PATH)
-    msg = f"📦 Чеків: {stats['checks']}\n🛒 Товарів: {stats['items']}"
-    await update.message.reply_text(msg, reply_markup=info_keyboard)
-
-# --- удаление чеков и товаров ---
-async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введіть ID чеку для видалення:", reply_markup=info_keyboard)
-    return "DELETE_CHECK"
-
-async def delete_check_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    check_id = update.message.text.strip()
-    success = delete_check_by_id(DB_PATH, check_id)
-    msg = "✅ Чек видалено." if success else "❌ Не знайдено чек."
-    await update.message.reply_text(msg, reply_markup=info_keyboard)
-    return ConversationHandler.END
-
-async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введіть ID товару для видалення:", reply_markup=info_keyboard)
-    return "DELETE_ITEM"
-
-async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    item_id = update.message.text.strip()
-    success = delete_item_by_id(DB_PATH, item_id)
-    msg = "✅ Товар видалено." if success else "❌ Не знайдено товар."
-    await update.message.reply_text(msg, reply_markup=info_keyboard)
-    return ConversationHandler.END
 
 def main():
     init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Основные команды
+    # Core
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("info", info))
     app.add_handler(CommandHandler("report_day", report_day))
@@ -218,44 +174,38 @@ def main():
     app.add_handler(CommandHandler("report_mounth", report_mounth))
     app.add_handler(CommandHandler("debug", debug))
 
-    # Файл-чек
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
-    # ConversationHandler для ручного ввода
+    # Manual
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("manual", manual_start)],
-        states={
-            WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name)],
-            WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        states={WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name)],
+                WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
     ))
 
-    # ConversationHandler для удаления чеков
+    # Delete check
     app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("delete_check", delete_check)],
-        states={"DELETE_CHECK": [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
+        entry_points=[CommandHandler("delete_check", delete_check_start)],
+        states={DELETE_CHECK_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
     ))
-
-    # ConversationHandler для удаления товаров
+    # Delete item
     app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("delete_item", delete_item)],
-        states={"DELETE_ITEM": [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm)]},
-        fallbacks=[CommandHandler("cancel", cancel)],
+        entry_points=[CommandHandler("delete_item", delete_item_start)],
+        states={DELETE_ITEM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
     ))
 
-    # ConversationHandler для отчёта за период
+    # Report all
     app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("report_all", report_all)],
-        states={
-            "REPORT_ALL_FROM": [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
-            "REPORT_ALL_TO": [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        entry_points=[CommandHandler("report_all", report_all_start)],
+        states={REPORT_FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
+                REPORT_TO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
     ))
 
-    # Общий текстовый обработчик — в самом конце
+    # Fallback text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.run_polling()
