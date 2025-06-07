@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 
 WAITING_NAME, WAITING_PRICE = range(2)
 
-# Глобальная разметка клавиатуры с кнопкой Info
+# Кнопка Info остаётся доступной всегда
 info_keyboard = ReplyKeyboardMarkup(
-    [["💡 Info"]], 
-    resize_keyboard=True, 
+    [["💡 Info"]],
+    resize_keyboard=True,
     one_time_keyboard=False
 )
 
@@ -46,11 +46,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/delete_item — видалити товар\n\n"
         "Натисніть кнопку «💡 Info», щоб побачити список команд."
     )
-    # Отправляем сообщение со встроенной клавиатурой
     await update.message.reply_text(msg, reply_markup=info_keyboard)
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Просто вызываем start, чтобы показать список команд и кнопку снова
     await start(update, context)
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -63,7 +61,12 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    # Если пользователь в процессе manual, перенаправляем внутрь
+    # Если нажата кнопка Info
+    if text == "💡 Info":
+        await info(update, context)
+        return
+
+    # Если мы в процессе ручного ввода
     if context.user_data.get("manual_in_progress"):
         await update.message.reply_text(
             "❗ Продовжіть введення назви або ціни товару, або введіть /cancel для скасування.",
@@ -71,14 +74,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Обычные чек-файлы
     if text.lower().startswith("http"):
         items = parse_xml_url(text)
     elif "<?xml" in text:
         items = parse_xml_string(text)
-    elif text == "💡 Info":
-        # Если нажата кнопка Info — просто показываем справку
-        await info(update, context)
-        return
     else:
         await update.message.reply_text(
             "❌ Це не схоже на XML або URL.\nСпробуйте ще.",
@@ -101,6 +101,7 @@ async def send_summary(update, items, check_id):
     text += f"\n💰 Всього: {total / 100:.2f} грн"
     await update.message.reply_text(text, reply_markup=info_keyboard)
 
+# --- ручной ввод ---
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["manual_in_progress"] = True
     await update.message.reply_text("Введіть назву товару:", reply_markup=info_keyboard)
@@ -118,7 +119,7 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Невірна сума. Спробуйте ще:", reply_markup=info_keyboard)
         return WAITING_PRICE
 
-    manual_data = context.user_data.get('manual_data', {})
+    manual_data = context.user_data.pop('manual_data', {})
     name = manual_data.get("name", "Товар")
     category = categorize(name)
     now = datetime.now()
@@ -128,15 +129,9 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "category": category,
         "sum": int(price * 100)
     }
-    check_id = save_items_to_db([item], DB_PATH)
-    await update.message.reply_text(
-        f"✅ Додано: {name} ({category}) — {price:.2f} грн",
-        reply_markup=info_keyboard
-    )
-
-    context.user_data.pop('manual_data', None)
+    save_items_to_db([item], DB_PATH)
+    await update.message.reply_text(f"✅ Додано: {name} ({category}) — {price:.2f} грн", reply_markup=info_keyboard)
     context.user_data.pop('manual_in_progress', None)
-
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -145,6 +140,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Скасовано.", reply_markup=info_keyboard)
     return ConversationHandler.END
 
+# --- отчёты ---
 async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_report(update, period="day")
 
@@ -187,6 +183,7 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📦 Чеків: {stats['checks']}\n🛒 Товарів: {stats['items']}"
     await update.message.reply_text(msg, reply_markup=info_keyboard)
 
+# --- удаление чеков и товаров ---
 async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введіть ID чеку для видалення:", reply_markup=info_keyboard)
     return "DELETE_CHECK"
@@ -213,18 +210,18 @@ def main():
     init_db()
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # Основные команды
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("info", info))
     app.add_handler(CommandHandler("report_day", report_day))
     app.add_handler(CommandHandler("report_week", report_week))
     app.add_handler(CommandHandler("report_mounth", report_mounth))
-    app.add_handler(CommandHandler("report_all", report_all))
     app.add_handler(CommandHandler("debug", debug))
-    app.add_handler(CommandHandler("delete_check", delete_check))
-    app.add_handler(CommandHandler("delete_item", delete_item))
+
+    # Файл-чек
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
-    # ConversationHandler обязательно ДО общего handle_text
+    # ConversationHandler для ручного ввода
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("manual", manual_start)],
         states={
@@ -234,18 +231,21 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
+    # ConversationHandler для удаления чеков
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("delete_check", delete_check)],
         states={"DELETE_CHECK": [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
+    # ConversationHandler для удаления товаров
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("delete_item", delete_item)],
         states={"DELETE_ITEM": [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
+    # ConversationHandler для отчёта за период
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("report_all", report_all)],
         states={
@@ -255,7 +255,7 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
 
-    # Общий текстовый обработчик — последний, чтобы не перехватывать сообщения внутри разговоров
+    # Общий текстовый обработчик — в самом конце
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.run_polling()
