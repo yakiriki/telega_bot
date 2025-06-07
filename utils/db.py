@@ -1,99 +1,111 @@
-import sqlite3
-from datetime import datetime, timedelta
+import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
-def init_db(path):
-    conn = sqlite3.connect(path)
-    cursor = conn.cursor()
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS checks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT
-    )""")
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        check_id INTEGER,
-        date TEXT,
-        name TEXT,
-        category TEXT,
-        sum INTEGER,
-        FOREIGN KEY(check_id) REFERENCES checks(id)
-    )""")
-    conn.commit()
-    conn.close()
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-def save_items_to_db(items, path):
-    conn = sqlite3.connect(path)
-    cursor = conn.cursor()
-    now = datetime.now().strftime("%Y-%m-%d")
-    cursor.execute("INSERT INTO checks (date) VALUES (?)", (now,))
-    check_id = cursor.lastrowid
-    for item in items:
-        cursor.execute("""
-        INSERT INTO items (check_id, date, name, category, sum)
-        VALUES (?, ?, ?, ?, ?)
-        """, (
-            check_id,
-            item.get("date", now),
-            item["name"],
-            item["category"],
-            item["sum"]
-        ))
-    conn.commit()
-    conn.close()
-    return check_id
-
-def get_report(path, period, from_date=None, to_date=None):
-    conn = sqlite3.connect(path)
-    cursor = conn.cursor()
-
-    if period == "day":
-        date_filter = f"date = '{datetime.now().date()}'"
-    elif period == "week":
-        start = datetime.now().date() - timedelta(days=7)
-        date_filter = f"date >= '{start}'"
-    elif period == "month":
-        start = datetime.now().replace(day=1).date()
-        date_filter = f"date >= '{start}'"
-    elif period == "custom":
-        date_filter = f"date BETWEEN '{from_date}' AND '{to_date}'"
-    else:
-        date_filter = "1=1"
-
-    cursor.execute(f"""
-    SELECT category, SUM(sum) FROM items
-    WHERE {date_filter}
-    GROUP BY category
+def init_db():
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS checks (
+            id SERIAL PRIMARY KEY,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
     """)
-    rows = cursor.fetchall()
-    conn.close()
-    return {row[0]: row[1] for row in rows}
-
-def get_debug_info(path):
-    conn = sqlite3.connect(path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM checks")
-    checks = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM items")
-    items = cursor.fetchone()[0]
-    conn.close()
-    return {"checks": checks, "items": items}
-
-def delete_check_by_id(path, check_id):
-    conn = sqlite3.connect(path)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM items WHERE check_id = ?", (check_id,))
-    cursor.execute("DELETE FROM checks WHERE id = ?", (check_id,))
-    deleted = cursor.rowcount
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS items (
+            id SERIAL PRIMARY KEY,
+            check_id INTEGER REFERENCES checks(id) ON DELETE CASCADE,
+            date DATE NOT NULL,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            sum INTEGER NOT NULL
+        );
+    """)
     conn.commit()
+    cur.close()
     conn.close()
-    return deleted > 0
 
-def delete_item_by_id(path, item_id):
-    conn = sqlite3.connect(path)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM items WHERE id = ?", (item_id,))
-    deleted = cursor.rowcount
+def save_items_to_db(items, db_path=None):
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO checks DEFAULT VALUES RETURNING id;")
+    new_check_id = cur.fetchone()[0]
+    for item in items:
+        cur.execute(
+            "INSERT INTO items (check_id, date, name, category, sum) VALUES (%s, %s, %s, %s, %s)",
+            (new_check_id, item["date"], item["name"], item["category"], item["sum"])
+        )
     conn.commit()
+    cur.close()
     conn.close()
-    return deleted > 0
+    return new_check_id
+
+def get_report(db_path, period, from_date=None, to_date=None):
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    if period == "day":
+        cur.execute("""
+            SELECT category, SUM(sum) AS total
+            FROM items
+            WHERE date = CURRENT_DATE
+            GROUP BY category;
+        """)
+    elif period == "week":
+        cur.execute("""
+            SELECT category, SUM(sum) AS total
+            FROM items
+            WHERE date >= CURRENT_DATE - INTERVAL '7 days'
+            GROUP BY category;
+        """)
+    elif period == "month":
+        cur.execute("""
+            SELECT category, SUM(sum) AS total
+            FROM items
+            WHERE date >= date_trunc('month', CURRENT_DATE)
+            GROUP BY category;
+        """)
+    elif period == "custom" and from_date and to_date:
+        cur.execute("""
+            SELECT category, SUM(sum) AS total
+            FROM items
+            WHERE date BETWEEN %s AND %s
+            GROUP BY category;
+        """, (from_date, to_date))
+    else:
+        cur.execute("SELECT category, SUM(sum) AS total FROM items GROUP BY category;")
+
+    rows = cur.fetchall()
+    conn.close()
+    return {row["category"]: row["total"] for row in rows}
+
+def get_debug_info(db_path=None):
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM checks;")
+    checks_count = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM items;")
+    items_count = cur.fetchone()[0]
+    conn.close()
+    return {"checks": checks_count, "items": items_count}
+
+def delete_check_by_id(db_path, check_id):
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM checks WHERE id = %s RETURNING id;", (check_id,))
+    deleted = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return bool(deleted)
+
+def delete_item_by_id(db_path, item_id):
+    conn = psycopg2.connect(DATABASE_URL)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM items WHERE id = %s RETURNING id;", (item_id,))
+    deleted = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return bool(deleted)
