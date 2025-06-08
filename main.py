@@ -254,3 +254,38 @@ def main():
 
 if __name__ == "__main__":
     main()
+    import os
+import threading
+import time
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from telegram.ext import ApplicationBuilder  # ваш уже существующий
+
+# 1) Короткий HTTP-сервер для health-check
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_health_server():
+    port = int(os.environ.get("PORT", "8000"))
+    srv = HTTPServer(("0.0.0.0", port), HealthHandler)
+    srv.serve_forever()
+
+# Запускаем health-сервер в фоне
+threading.Thread(target=run_health_server, daemon=True).start()
+
+# === теперь оборачиваем ваш main() ===
+if __name__ == "__main__":
+    while True:
+        try:
+            main()  # ваша функция, где вызывается app.run_polling()
+        except Exception as e:
+            # логируем и ждем перед перезапуском
+            logging.exception("Bot crashed, restarting in 5s")
+            time.sleep(5)
+        else:
+            # если main() когда-то выйдет без исключения — всё равно перезапустим
+            logging.info("Bot main() exited cleanly, restarting in 5s")
+            time.sleep(5)
+
