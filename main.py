@@ -12,9 +12,6 @@ from telegram.ext import (
     ConversationHandler,
 )
 
-# aiohttp нам больше не нужен, всё делает run_webhook
-# from aiohttp import web  
-
 from parsers.xml_parser import parse_xml_file, parse_xml_string, parse_xml_url
 from utils.db import (
     init_db,
@@ -34,6 +31,12 @@ HOST_URL  = os.getenv("RENDER_EXTERNAL_URL")  # Домен вида https://your
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ##### ИЗМЕНЕНИЕ ДЛЯ ДИАГНОСТИКИ #####
+# Добавляем вывод используемого порта и хоста
+logger.info(f"Настройки: PORT={PORT}, HOST_URL={HOST_URL}")
+# ##### КОНЕЦ ИЗМЕНЕНИЯ #####
+
 
 # ===== Состояния =====
 WAITING_NAME, WAITING_PRICE = range(2)
@@ -232,7 +235,7 @@ def main():
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("report_all", report_all)],
         states={REPORT_ALL_FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
-                REPORT_ALL_TO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)]},
+                REPORT_ALL_TO:    [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
@@ -242,7 +245,7 @@ def main():
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        url_path=f"/{BOT_TOKEN}",      # <-- здесь заменено
+        url_path=f"/{BOT_TOKEN}",
         webhook_url=f"{HOST_URL}/{BOT_TOKEN}"
     )
 
