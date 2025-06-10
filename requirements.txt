@@ -5,3 +5,4 @@ requests==2.31.0
 psycopg2-binary
 fastapi
 uvicorn
+aiohttp
