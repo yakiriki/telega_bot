@@ -141,7 +141,7 @@ async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def report_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_report(update, "week")
 
-async def report_mounth(update: Update, context: ContextTypes.PREFERRED_TYPE):
+async def report_mounth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_report(update, "month")
 
 async def report_all_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
