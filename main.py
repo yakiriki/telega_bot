@@ -242,7 +242,7 @@ def main():
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_path=f"/{BOT_TOKEN}",      # <-- здесь заменено
+        url_path=f"/{BOT_TOKEN}",      # <-- здесь заменено
         webhook_url=f"{HOST_URL}/{BOT_TOKEN}"
     )
 
