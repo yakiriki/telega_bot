@@ -1,6 +1,7 @@
 import os
 import logging
 from datetime import datetime
+
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,7 +11,9 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
 )
-from aiohttp import web
+
+# Убираем ручной aiohttp, пользуясь встроенным run_webhook
+# from aiohttp import web  
 
 from parsers.xml_parser import parse_xml_file, parse_xml_string, parse_xml_url
 from utils.db import (
@@ -23,22 +26,26 @@ from utils.db import (
 )
 from utils.categories import categorize
 
+# ===== Конфигурация =====
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DB_PATH = os.getenv("DATABASE_URL")  # Используем DATABASE_URL, проверенный в db.py
-PORT = int(os.getenv("PORT", 8443))  # Render назначает реальный порт
+DB_URL    = os.getenv("DATABASE_URL")      # URL Supabase
+PORT      = int(os.getenv("PORT", 8443))   # Render назначит свой
+# Render автоматически предоставляет переменную RENDER_EXTERNAL_URL с вашим доменом
+HOST_URL  = os.getenv("RENDER_EXTERNAL_URL")  
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ===== Состояния для ConversationHandler =====
 WAITING_NAME, WAITING_PRICE = range(2)
-DELETE_CHECK_ID = "DELETE_CHECK"
-DELETE_ITEM_ID = "DELETE_ITEM"
-REPORT_ALL_FROM = "REPORT_ALL_FROM"
-REPORT_ALL_TO = "REPORT_ALL_TO"
+DELETE_CHECK_ID            = "DELETE_CHECK"
+DELETE_ITEM_ID             = "DELETE_ITEM"
+REPORT_ALL_FROM            = "REPORT_ALL_FROM"
+REPORT_ALL_TO              = "REPORT_ALL_TO"
 
 info_keyboard = ReplyKeyboardMarkup([["💡 Info"]], resize_keyboard=True)
 
-# === Основные команды ===
+# ===== Handlers (ваши функции без изменений) =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -58,8 +65,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
-
-# === XML / вставка ===
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.document.get_file()
@@ -99,15 +104,13 @@ async def send_summary(update, items, check_id, item_ids):
     text += f"\n💰 Всього: {tot/100:.2f} грн"
     await update.message.reply_text(text)
 
-# === Ручна вставка ===
-
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["manual_in_progress"] = True
     await update.message.reply_text("Введіть назву товару:")
     return WAITING_NAME
 
 async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["manual_data"] = {'name': update.message.text}
+    context.user_data['manual_data'] = {'name': update.message.text}
     await update.message.reply_text("Введіть суму в грн (наприклад:23.50):")
     return WAITING_PRICE
 
@@ -118,8 +121,8 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Невірна сума.")
         return WAITING_PRICE
     name = context.user_data['manual_data']['name']
-    cat = categorize(name)
-    now = datetime.now().strftime("%Y-%m-%d")
+    cat  = categorize(name)
+    now  = datetime.now().strftime("%Y-%m-%d")
     item = {"date": now, "name": name, "category": cat, "sum": int(price*100)}
     check_id, item_ids = save_items_to_db([item])
     await update.message.reply_text(f"✅ Додано ID {item_ids[0]} — {name} ({cat}) — {price:.2f} грн")
@@ -130,8 +133,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("✅ Скасовано.")
     return ConversationHandler.END
-
-# === Видалення ===
 
 async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введіть ID чеку для видалення:")
@@ -150,8 +151,6 @@ async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
     ok = delete_item_by_id(update.message.text.strip())
     await update.message.reply_text("✅ Товар видалено." if ok else "❌ Не знайдено товар.")
     return ConversationHandler.END
-
-# === Отчеты ===
 
 async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = get_report("day")
@@ -175,8 +174,8 @@ async def report_all_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return REPORT_ALL_TO
 
 async def report_all_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    fr = context.user_data.get("from_date")
-    to = update.message.text.strip()
+    fr   = context.user_data.get("from_date")
+    to   = update.message.text.strip()
     data = get_report("custom", fr, to)
     await send_report(update, data, f"з {fr} по {to}")
     context.user_data.clear()
@@ -194,24 +193,17 @@ async def send_report(update, data, period_name):
     text += f"\n💰 Всего: {total/100:.2f} грн"
     await update.message.reply_text(text)
 
-# === Debug ===
-
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = get_debug_info()
     await update.message.reply_text(f"🛠️ Чеки: {st['checks']}\n🛠️ Товари: {st['items']}")
 
-# === Health ===
-
-async def health(request):
-    return web.Response(text="OK")
-
-# === Main + Webhook-сервер ===
-
+# ===== Полное исправление для webhook-сервера =====
 def main():
-    init_db(DB_PATH)  # Используем DATABASE_URL
+    # 1) Инициализируем БД (DB_URL указывает на ваш DATABASE_URL)
+    init_db(DB_URL)
 
+    # 2) Создаём приложение Telegram с вашими хендлерами
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("info", info))
     app.add_handler(CommandHandler("report_day", report_day))
@@ -219,7 +211,6 @@ def main():
     app.add_handler(CommandHandler("report_month", report_month))
     app.add_handler(CommandHandler("report_all", report_all))
     app.add_handler(CommandHandler("debug", debug))
-
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("manual", manual_start)],
         states={WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name)],
@@ -239,23 +230,19 @@ def main():
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("report_all", report_all)],
         states={REPORT_ALL_FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
-                REPORT_ALL_TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)]},
+                REPORT_ALL_TO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)]},
         fallbacks=[CommandHandler("cancel", cancel)],
     ))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    aio = web.Application()
-    aio.router.add_post(f"/{BOT_TOKEN}", lambda req: asyncio.create_task(process_update(req, app)))
-    aio.router.add_get("/health", health)
-
-    web.run_app(aio, port=PORT)
-
-async def process_update(request, app):
-    data = await request.json()
-    upd = Update.de_json(data, app.bot)
-    await app.update_queue.put(upd)
-    return web.Response(text="OK")
+    # 3) Запуск webhook и HTTP-сервера вместе
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_url_path=f"/{BOT_TOKEN}",
+        webhook_url=f"{HOST_URL}/{BOT_TOKEN}",
+    )
 
 if __name__ == "__main__":
     main()
