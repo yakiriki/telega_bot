@@ -10,15 +10,22 @@ from telegram.ext import (
     ContextTypes,
     ConversationHandler,
 )
-from aiohttp import web  # HTTP-сервер для webhook
+from aiohttp import web
 
 from parsers.xml_parser import parse_xml_file, parse_xml_string, parse_xml_url
-from utils.db import init_db, save_items_to_db, get_report, get_debug_info, delete_check_by_id, delete_item_by_id
+from utils.db import (
+    init_db,
+    save_items_to_db,
+    get_report,
+    get_debug_info,
+    delete_check_by_id,
+    delete_item_by_id,
+)
 from utils.categories import categorize
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DB_PATH = "/data/expenses.db"
-PORT = int(os.getenv("PORT", 8443))  # порт для вебхука, Render назначит свой
+DB_PATH = os.getenv("DATABASE_URL")  # Используем DATABASE_URL, проверенный в db.py
+PORT = int(os.getenv("PORT", 8443))  # Render назначает реальный порт
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,66 +43,63 @@ info_keyboard = ReplyKeyboardMarkup([["💡 Info"]], resize_keyboard=True)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "👋 Привіт! Я бот для обліку витрат по чеках.\n\n"
-        "📌 Список команд:\n"
+        "📌 Команди:\n"
         "/info — довідка\n"
-        "/report_day — звіт за сьогодні\n"
-        "/report_week — звіт за тиждень\n"
-        "/report_mounth — звіт за місяць\n"
-        "/report_all — звіт за вибраний період\n"
-        "/debug — технічна інформація\n"
-        "/manual — додати товар вручну\n"
+        "/report_day — за сьогодні\n"
+        "/report_week — за тиждень\n"
+        "/report_month — за місяць\n"
+        "/report_all — звіт за період\n"
+        "/debug — техінфо\n"
+        "/manual — додати вручну\n"
         "/delete_check — видалити чек\n"
-        "/delete_item — видалити товар\n\n"
-        "Натисніть кнопку «💡 Info», щоб побачити список команд."
+        "/delete_item — видалити товар\n"
     )
     await update.message.reply_text(msg, reply_markup=info_keyboard)
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
-# === Обработка XML ===
+# === XML / вставка ===
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.document.get_file()
-    file_path = f"/tmp/{file.file_id}.xml"
-    await file.download_to_drive(file_path)
-    items = parse_xml_file(file_path)
-    check_id, item_ids = save_items_to_db(items, DB_PATH)
+    path = f"/tmp/{file.file_id}.xml"
+    await file.download_to_drive(path)
+    items = parse_xml_file(path)
+    check_id, item_ids = save_items_to_db(items)
     await send_summary(update, items, check_id, item_ids)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    txt = update.message.text.strip()
     if context.user_data.get("manual_in_progress"):
-        await update.message.reply_text("❗ Продовжіть введення назви або ціни товару, або введіть /cancel.")
+        await update.message.reply_text("❗ Завершіть /cancel або продовжіть.")
         return
-
-    if text.lower().startswith("http"):
-        items = parse_xml_url(text)
-    elif "<?xml" in text:
-        items = parse_xml_string(text)
-    elif text == "💡 Info":
+    if txt.lower().startswith("http"):
+        items = parse_xml_url(txt)
+    elif "<?xml" in txt:
+        items = parse_xml_string(txt)
+    elif txt == "💡 Info":
         await info(update, context)
         return
     else:
-        await update.message.reply_text("❌ Це не схоже на XML або URL.\nСпробуйте ще.")
+        await update.message.reply_text("❌ Це не XML/URL.")
         return
-
-    check_id, item_ids = save_items_to_db(items, DB_PATH)
+    check_id, item_ids = save_items_to_db(items)
     await send_summary(update, items, check_id, item_ids)
 
 async def send_summary(update, items, check_id, item_ids):
     if not items:
-        await update.message.reply_text("❌ Не вдалося знайти товари в цьому чеку.")
+        await update.message.reply_text("❗ Нема товарів.")
         return
-    text = f"✅ Додано чек #{check_id}:\n"
-    total = 0
-    for item, item_id in zip(items, item_ids):
-        text += f"• ID {item_id} — {item['name']} ({item['category']}) — {item['sum'] / 100:.2f} грн\n"
-        total += item['sum']
-    text += f"\n💰 Всього: {total / 100:.2f} грн"
+    text = f"✅ Чек #{check_id}:\n"
+    tot = 0
+    for it, iid in zip(items, item_ids):
+        text += f"• ID {iid} — {it['name']} ({it['category']}) — {it['sum']/100:.2f} грн\n"
+        tot += it["sum"]
+    text += f"\n💰 Всього: {tot/100:.2f} грн"
     await update.message.reply_text(text)
 
-# === Вручну ===
+# === Ручна вставка ===
 
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["manual_in_progress"] = True
@@ -103,34 +107,28 @@ async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_NAME
 
 async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['manual_data'] = {'name': update.message.text}
-    await update.message.reply_text("Введіть суму в грн (наприклад, 23.50):")
+    context.user_data["manual_data"] = {'name': update.message.text}
+    await update.message.reply_text("Введіть суму в грн (наприклад:23.50):")
     return WAITING_PRICE
 
 async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         price = float(update.message.text.replace(",", "."))
     except ValueError:
-        await update.message.reply_text("❌ Невірна сума. Спробуйте ще:")
+        await update.message.reply_text("❌ Невірна сума.")
         return WAITING_PRICE
-
     name = context.user_data['manual_data']['name']
-    category = categorize(name)
-    now = datetime.now()
-    item = {
-        "date": now.strftime("%Y-%m-%d"),
-        "name": name,
-        "category": category,
-        "sum": int(price * 100)
-    }
-    check_id, item_ids = save_items_to_db([item], DB_PATH)
-    await update.message.reply_text(f"✅ Додано: ID {item_ids[0]} — {name} ({category}) — {price:.2f} грн")
+    cat = categorize(name)
+    now = datetime.now().strftime("%Y-%m-%d")
+    item = {"date": now, "name": name, "category": cat, "sum": int(price*100)}
+    check_id, item_ids = save_items_to_db([item])
+    await update.message.reply_text(f"✅ Додано ID {item_ids[0]} — {name} ({cat}) — {price:.2f} грн")
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text("Скасовано.")
+    await update.message.reply_text("✅ Скасовано.")
     return ConversationHandler.END
 
 # === Видалення ===
@@ -140,147 +138,124 @@ async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return DELETE_CHECK_ID
 
 async def delete_check_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    check_id = update.message.text.strip()
-    success = delete_check_by_id(DB_PATH, check_id)
-    msg = "✅ Чек видалено." if success else "❌ Не знайдено чек."
-    await update.message.reply_text(msg)
+    ok = delete_check_by_id(update.message.text.strip())
+    await update.message.reply_text("✅ Чек видалено." if ok else "❌ Не знайдено чек.")
     return ConversationHandler.END
 
 async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введіть ID товару для видалення:")
+    await update.message.reply_text("Введіть ID товару:")
     return DELETE_ITEM_ID
 
 async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    item_id = update.message.text.strip()
-    success = delete_item_by_id(DB_PATH, item_id)
-    msg = "✅ Товар видалено." if success else "❌ Не знайдено товар."
-    await update.message.reply_text(msg)
+    ok = delete_item_by_id(update.message.text.strip())
+    await update.message.reply_text("✅ Товар видалено." if ok else "❌ Не знайдено товар.")
     return ConversationHandler.END
 
-# === Звіти ===
+# === Отчеты ===
 
 async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_report(DB_PATH, "day")
+    data = get_report("day")
     await send_report(update, data, "за сьогодні")
 
 async def report_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_report(DB_PATH, "week")
+    data = get_report("week")
     await send_report(update, data, "за тиждень")
 
-async def report_mounth(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_report(DB_PATH, "month")
+async def report_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = get_report("month")
     await send_report(update, data, "за місяць")
 
 async def report_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Введіть дату початку у форматі YYYY-MM-DD:")
+    await update.message.reply_text("Введіть дату початку (YYYY-MM-DD):")
     return REPORT_ALL_FROM
 
 async def report_all_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    from_date = update.message.text.strip()
-    context.user_data['from_date'] = from_date
-    await update.message.reply_text("Введіть дату кінця у форматі YYYY-MM-DD:")
+    context.user_data["from_date"] = update.message.text.strip()
+    await update.message.reply_text("Введіть дату кінця:")
     return REPORT_ALL_TO
 
 async def report_all_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    to_date = update.message.text.strip()
-    from_date = context.user_data.get('from_date')
-    data = get_report(DB_PATH, "custom", from_date=from_date, to_date=to_date)
-    await send_report(update, data, f"з {from_date} по {to_date}")
+    fr = context.user_data.get("from_date")
+    to = update.message.text.strip()
+    data = get_report("custom", fr, to)
+    await send_report(update, data, f"з {fr} по {to}")
     context.user_data.clear()
     return ConversationHandler.END
 
 async def send_report(update, data, period_name):
     if not data:
-        await update.message.reply_text(f"❌ Даних за {period_name} не знайдено.")
+        await update.message.reply_text(f"❌ Нема даних {period_name}.")
         return
     text = f"📊 Звіт {period_name}:\n"
     total = 0
-    for cat, val in data.items():
-        text += f"• {cat}: {val / 100:.2f} грн\n"
-        total += val
-    text += f"\n💰 Всього: {total / 100:.2f} грн"
+    for cat, s in data.items():
+        text += f"• {cat}: {s/100:.2f} грн\n"
+        total += s
+    text += f"\n💰 Всего: {total/100:.2f} грн"
     await update.message.reply_text(text)
 
 # === Debug ===
 
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    info = get_debug_info(DB_PATH)
-    await update.message.reply_text(f"🛠️ Технічна інформація:\nЧеки: {info['checks']}\nТовари: {info['items']}")
+    st = get_debug_info()
+    await update.message.reply_text(f"🛠️ Чеки: {st['checks']}\n🛠️ Товари: {st['items']}")
 
-# === Health check endpoint для Render ===
+# === Health ===
 
 async def health(request):
     return web.Response(text="OK")
 
-# === Main ===
+# === Main + Webhook-сервер ===
 
 def main():
-    init_db()
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    init_db(DB_PATH)  # Используем DATABASE_URL
 
-    # Регіструємо всі хендлери як в poll-версії
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("info", info))
-    application.add_handler(CommandHandler("report_day", report_day))
-    application.add_handler(CommandHandler("report_week", report_week))
-    application.add_handler(CommandHandler("report_mounth", report_mounth))
-    application.add_handler(CommandHandler("debug", debug))
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    manual_conv = ConversationHandler(
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("info", info))
+    app.add_handler(CommandHandler("report_day", report_day))
+    app.add_handler(CommandHandler("report_week", report_week))
+    app.add_handler(CommandHandler("report_month", report_month))
+    app.add_handler(CommandHandler("report_all", report_all))
+    app.add_handler(CommandHandler("debug", debug))
+
+    app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("manual", manual_start)],
-        states={
-            WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name)],
-            WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price)],
-        },
+        states={WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name)],
+                WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price)]},
         fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    delete_check_conv = ConversationHandler(
+    ))
+    app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("delete_check", delete_check)],
         states={DELETE_CHECK_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm)]},
         fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    delete_item_conv = ConversationHandler(
+    ))
+    app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("delete_item", delete_item)],
         states={DELETE_ITEM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm)]},
         fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    report_all_conv = ConversationHandler(
+    ))
+    app.add_handler(ConversationHandler(
         entry_points=[CommandHandler("report_all", report_all)],
-        states={
-            REPORT_ALL_FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
-            REPORT_ALL_TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)],
-        },
+        states={REPORT_ALL_FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
+                REPORT_ALL_TO: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)]},
         fallbacks=[CommandHandler("cancel", cancel)],
-    )
+    ))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    application.add_handler(manual_conv)
-    application.add_handler(delete_check_conv)
-    application.add_handler(delete_item_conv)
-    application.add_handler(report_all_conv)
+    aio = web.Application()
+    aio.router.add_post(f"/{BOT_TOKEN}", lambda req: asyncio.create_task(process_update(req, app)))
+    aio.router.add_get("/health", health)
 
-    application.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    web.run_app(aio, port=PORT)
 
-    # Создаем aiohttp-сервер
-    app = web.Application()
-
-    # Регистрируем handler Telegram webhook по пути с BOT_TOKEN
-    async def handle_update(request):
-        if request.match_info.get('token') != BOT_TOKEN:
-            return web.Response(status=403, text="Forbidden")
-        request_body = await request.text()
-        update = Update.de_json(data=await request.json(), bot=application.bot)
-        await application.update_queue.put(update)
-        return web.Response(text="OK")
-
-    app.router.add_post(f"/{BOT_TOKEN}", handle_update)
-    app.router.add_get("/health", health)
-
-    logger.info(f"Запуск webhook-сервера на порту {PORT}")
-    web.run_app(app, port=PORT)
+async def process_update(request, app):
+    data = await request.json()
+    upd = Update.de_json(data, app.bot)
+    await app.update_queue.put(upd)
+    return web.Response(text="OK")
 
 if __name__ == "__main__":
     main()
