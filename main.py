@@ -1,92 +1,114 @@
 import os
 import logging
-# from datetime import datetime # Закомментировано, так как не используется напрямую в этой версии
+from datetime import datetime
 
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    filters,
-    ContextTypes,
     ConversationHandler,
+    ContextTypes,
+    filters,
 )
+from aiohttp import web
 
-# Все импорты, связанные с БД и парсерами, закомментированы для диагностики
-# from parsers.xml_parser import parse_xml_file, parse_xml_string, parse_xml_url
-# from utils.db import (
-#     init_db,
-#     save_items_to_db,
-#     get_report,
-#     get_debug_info,
-#     delete_check_by_id,
-#     delete_item_by_id,
-# )
-# from utils.categories import categorize
+from parsers.xml_parser import parse_xml_file, parse_xml_string, parse_xml_url
+from utils.db import init_db, save_items_to_db, get_report, get_debug_info, delete_check_by_id, delete_item_by_id
+from utils.categories import categorize
 
-# ===== Настройки =====
+# ====== Конфигурация ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DB_URL    = os.getenv("DATABASE_URL") # Переменная остается, но не используется
-PORT      = int(os.getenv("PORT", 8443))
-HOST_URL  = os.getenv("RENDER_EXTERNAL_URL")
+DB_URL    = os.getenv("DATABASE_URL")
+PORT      = int(os.getenv("PORT", "8443"))
+HOST_URL  = os.getenv("RENDER_EXTERNAL_URL")  # например "https://your-app.onrender.com"
 
-# Настраиваем логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Выводим настройки для проверки
-logger.info(f"Настройки: PORT={PORT}, HOST_URL={HOST_URL}")
+# ====== Состояния ======
+WAIT_NAME, WAIT_PRICE = range(2)
+DEL_CHECK, DEL_ITEM = "DEL_CHECK", "DEL_ITEM"
+REP_FROM, REP_TO = "REP_FROM", "REP_TO"
 
-# ===== Состояния (оставлены, но не будут активно использоваться) =====
-WAITING_NAME, WAITING_PRICE = range(2)
-DELETE_CHECK_ID            = "DELETE_CHECK"
-DELETE_ITEM_ID             = "DELETE_ITEM"
-REPORT_ALL_FROM            = "REPORT_ALL_FROM"
-REPORT_ALL_TO              = "REPORT_ALL_TO"
+info_kb = ReplyKeyboardMarkup([["💡 Info"]], resize_keyboard=True)
 
-info_keyboard = ReplyKeyboardMarkup([["💡 Info"]], resize_keyboard=True)
-
-# ===== Хендлеры =====
+# ====== Хендлеры ======
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = (
-        "👋 Привіт! Я бот для обліку витрат по чеках.\n\n"
-        "📌 Команди:\n"
+    text = (
+        "👋 Привіт! Я бот для обліку витрат.\n\n"
         "/info — довідка\n"
-        "\n⚠️ Большинство функций отключены для диагностики (нет доступа к БД)."
+        "/report_day — за сьогодні\n"
+        "/report_week — за тиждень\n"
+        "/report_month — за місяць\n"
+        "/report_all — за період\n"
+        "/debug — техінфо\n"
+        "/manual — додати вручну\n"
+        "/delete_check — видалити чек\n"
+        "/delete_item — видалити товар\n"
     )
-    await update.message.reply_text(msg, reply_markup=info_keyboard)
+    await update.message.reply_text(text, reply_markup=info_kb)
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
-# Функции, которые раньше работали с файлами/текстом/ручным вводом и БД, теперь просто отвечают заглушкой
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Обработка файлов временно отключена для диагностики (нет доступа к БД).")
+    file = await update.message.document.get_file()
+    path = f"/tmp/{file.file_id}.xml"
+    await file.download_to_drive(path)
+    items = parse_xml_file(path)
+    cid, iids = save_items_to_db(items)
+    await send_summary(update, items, cid, iids)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
-    if context.user_data.get("manual_in_progress"):
+    if context.user_data.get("manual"):
         await update.message.reply_text("❗ Завершіть /cancel або продовжіть.")
         return
-    if txt == "💡 Info":
-        await info(update, context)
+    if txt.lower().startswith("http"):
+        items = parse_xml_url(txt)
+    elif "<?xml" in txt:
+        items = parse_xml_string(txt)
+    elif txt == "💡 Info":
+        return await info(update, context)
     else:
-        await update.message.reply_text("Обработка текста временно отключена для диагностики (нет доступа к БД).")
+        return await update.message.reply_text("❌ Невірний формат.")
+    cid, iids = save_items_to_db(items)
+    await send_summary(update, items, cid, iids)
+
+async def send_summary(update, items, cid, iids):
+    if not items:
+        return await update.message.reply_text("❌ Чек порожній.")
+    text = f"✅ Чек #{cid}:\n"
+    total = 0
+    for it, iid in zip(items, iids):
+        text += f"• ID {iid}: {it['name']} ({it['category']}) — {it['sum']/100:.2f} грн\n"
+        total += it["sum"]
+    text += f"\n💰 Всього: {total/100:.2f} грн"
+    await update.message.reply_text(text)
 
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["manual_in_progress"] = True
-    await update.message.reply_text("Ручной ввод временно отключен для диагностики (нет доступа к БД).")
-    context.user_data.clear() # Сразу очищаем, чтобы не висело состояние
-    return ConversationHandler.END # Завершаем ConversationHandler сразу же
+    context.user_data["manual"] = True
+    await update.message.reply_text("Введіть назву товару:")
+    return WAIT_NAME
 
 async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Ручной ввод временно отключен для диагностики (нет доступа к БД).")
-    context.user_data.clear()
-    return ConversationHandler.END
+    context.user_data["name"] = update.message.text
+    await update.message.reply_text("Введіть суму (23.50):")
+    return WAIT_PRICE
 
 async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Ручной ввод временно отключен для диагностики (нет доступа к БД).")
+    try:
+        price = float(update.message.text.replace(",", "."))
+    except ValueError:
+        await update.message.reply_text("❌ Невірна сума.")
+        return WAIT_PRICE
+    name = context.user_data.pop("name")
+    category = categorize(name)
+    date = datetime.now().strftime("%Y-%m-%d")
+    cid, iids = save_items_to_db([{"name":name,"category":category,"sum":int(price*100),"date":date}])
+    await update.message.reply_text(f"✅ Додано ID {iids[0]} — {name} ({category}) — {price:.2f} грн")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -95,91 +117,130 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Скасовано.")
     return ConversationHandler.END
 
-# Все функции, связанные с отчетами и удалением, также закомментированы
-# async def delete_check(...): pass
-# async def delete_check_confirm(...): pass
-# async def delete_item(...): pass
-# async def delete_item_confirm(...): pass
-# async def report_day(...): pass
-# async def report_week(...): pass
-# async def report_month(...): pass
-# async def report_all(...): pass
-# async def report_all_from(...): pass
-# async def report_all_to(...): pass
-# async def send_report(...): pass
-# async def debug(...): pass
+async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть ID чеку:")
+    return DEL_CHECK
 
+async def delete_check_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ok = delete_check_by_id(int(update.message.text))
+    await update.message.reply_text("✅ Видалено." if ok else "❌ Не знайдено.")
+    return ConversationHandler.END
 
-# Обработчик ошибок
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Логирует ошибку и отправляет сообщение пользователю (если возможно)."""
-    logger.error("Произошла ошибка при обработке обновления:", exc_info=context.error)
-    if isinstance(update, Update) and update.effective_message:
-        try:
-            await update.effective_message.reply_text(
-                "Извините, произошла внутренняя ошибка. Пожалуйста, попробуйте позже. "
-                "Подробнее в логах Render."
-            )
-        except Exception as e:
-            logger.error(f"Не удалось отправить сообщение об ошибке пользователю: {e}")
+async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть ID товару:")
+    return DEL_ITEM
 
-# ===== Main с run_webhook =====
+async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ok = delete_item_by_id(int(update.message.text))
+    await update.message.reply_text("✅ Видалено." if ok else "❌ Не знайдено.")
+    return ConversationHandler.END
 
-def main():
-    # Инициализация БД - ЗАКОММЕНТИРОВАНО! Это наш главный подозреваемый.
-    # init_db(DB_URL)
+async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _rep(update, "day", "сьогодні")
 
-    # Построение приложения
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+async def report_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _rep(update, "week", "тиждень")
 
-    # Регистрируем только базовые хендлеры, которые не требуют БД
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("info", info))
-    app.add_handler(ConversationHandler(
+async def report_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _rep(update, "month", "місяць")
+
+async def report_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Введіть дату початку (YYYY-MM-DD):")
+    return REP_FROM
+
+async def report_all_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["from"] = update.message.text
+    await update.message.reply_text("Введіть дату кінця:")
+    return REP_TO
+
+async def report_all_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    fr = context.user_data["from"]
+    to = update.message.text
+    await _send_report(update, get_report("custom", fr, to), f"з {fr} по {to}")
+    return ConversationHandler.END
+
+async def _rep(update, period, name):
+    await _send_report(update, get_report(period), name)
+
+async def _send_report(update, data, name):
+    if not data:
+        return await update.message.reply_text(f"❌ Нема даних за {name}.")
+    text = f"📊 Звіт за {name}:\n"
+    tot = 0
+    for cat, s in data.items():
+        text += f"• {cat}: {s/100:.2f} грн\n"
+        tot += s
+    text += f"\n💰 {tot/100:.2f} грн"
+    await update.message.reply_text(text)
+
+async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    stats = get_debug_info()
+    await update.message.reply_text(f"Чеки: {stats['checks']}\nТовари: {stats['items']}")
+
+async def health(request):
+    return web.Response(text="OK")
+
+# ====== Webhook и HTTP-сервер ======
+
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.update_queue.put(update)
+    return web.Response(text="OK")
+
+async def main():
+    # 1) Инициализация БД
+    init_db(DB_URL)
+
+    # 2) Создаём бота
+    global application
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # 3) Регистрируем хендлеры
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("info", info))
+    application.add_handler(CommandHandler("report_day", report_day))
+    application.add_handler(CommandHandler("report_week", report_week))
+    application.add_handler(CommandHandler("report_month", report_month))
+    application.add_handler(CommandHandler("report_all", report_all))
+    application.add_handler(CommandHandler("debug", debug))
+    application.add_handler(ConversationHandler(
         entry_points=[CommandHandler("manual", manual_start)],
-        states={
-            WAITING_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name)],
-            WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        states={WAIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name)],
+                WAIT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
     ))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("delete_check", delete_check)],
+        states={DEL_CHECK: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    ))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("delete_item", delete_item)],
+        states={DEL_ITEM: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    ))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("report_all", report_all)],
+        states={REP_FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
+                REP_TO:   [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)]},
+        fallbacks=[CommandHandler("cancel", cancel)]
+    ))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Все остальные хендлеры, связанные с БД, также закомментированы
-    # app.add_handler(CommandHandler("report_day", report_day))
-    # app.add_handler(CommandHandler("report_week", report_week))
-    # app.add_handler(CommandHandler("report_month", report_month))
-    # app.add_handler(CommandHandler("report_all", report_all))
-    # app.add_handler(CommandHandler("debug", debug))
-    # app.add_handler(ConversationHandler(
-    #     entry_points=[CommandHandler("delete_check", delete_check)],
-    #     states={DELETE_CHECK_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm)]},
-    #     fallbacks=[CommandHandler("cancel", cancel)],
-    # ))
-    # app.add_handler(ConversationHandler(
-    #     entry_points=[CommandHandler("delete_item", delete_item)],
-    #     states={DELETE_ITEM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm)]},
-    #     fallbacks=[CommandHandler("cancel", cancel)],
-    # ))
-    # app.add_handler(ConversationHandler(
-    #     entry_points=[CommandHandler("report_all", report_all)],
-    #     states={REPORT_ALL_FROM: [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from)],
-    #             REPORT_ALL_TO:    [MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to)]},
-    #     fallbacks=[CommandHandler("cancel", cancel)],
-    # ))
+    # 4) Устанавливаем webhook в Telegram
+    await application.initialize()
+    await application.bot.set_webhook(f"{HOST_URL}/{BOT_TOKEN}")
+    await application.start()
 
-
-    # Добавляем обработчик ошибок
-    app.add_error_handler(error_handler)
-
-    # Запуск webhook
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=f"/{BOT_TOKEN}",
-        webhook_url=f"{HOST_URL}/{BOT_TOKEN}"
-    )
+    # 5) Запускаем HTTP-сервер для webhook и health
+    app = web.Application()
+    app.router.add_post(f"/{BOT_TOKEN}", webhook_handler)
+    app.router.add_get("/health", health)
+    logger.info(f"HTTP-сервер запущен на порту {PORT}")
+    web.run_app(app, host="0.0.0.0", port=PORT)
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
