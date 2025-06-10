@@ -298,7 +298,7 @@ def main():
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
-        webhook_url_path=WEBHOOK_PATH,
+        url_path=WEBHOOK_PATH,
         webhook_url=f"{WEBHOOK_URL}{WEBHOOK_PATH}",
         # Для HTTPS-сертификата на Render дополнительных настроек не нужно
     )
