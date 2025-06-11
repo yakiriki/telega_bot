@@ -211,7 +211,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.error(f"Exception while handling update: {context.error}")
 
 # === FastAPI app ===
-
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 app = FastAPI()
 
 @app.get("/health")
@@ -227,7 +227,7 @@ async def telegram_webhook(request: Request):
 
 # === Telegram Application ===
 
-application = ApplicationBuilder().token(BOT_TOKEN).build()
+
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("info", info))
