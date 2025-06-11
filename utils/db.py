@@ -26,7 +26,7 @@ def save_items_to_db(items):
         cur.execute(
             "INSERT INTO items (check_id, name, category, amount, date) "
             "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (check_id, item["name"], item["category"], item["sum"], item["date"]),
+            (check_id, item["name"], item["category"], item["""sum"""], item["date"]),
         )
         item_ids.append(cur.fetchone()["id"])
 
@@ -42,24 +42,24 @@ def get_report(period, from_date=None, to_date=None):
     if period == "day":
         start = datetime.now().date()
         cur.execute(
-            "SELECT category, SUM(sum) AS total FROM items WHERE date = %s GROUP BY category",
+            "SELECT category, ""sum""(""sum"") AS total FROM items WHERE date = %s GROUP BY category",
             (start,),
         )
     elif period == "week":
         start = datetime.now().date() - timedelta(days=7)
         cur.execute(
-            "SELECT category, SUM(sum) AS total FROM items WHERE date >= %s GROUP BY category",
+            "SELECT category, ""sum""(""sum"") AS total FROM items WHERE date >= %s GROUP BY category",
             (start,),
         )
     elif period == "month":
         start = datetime.now().date().replace(day=1)
         cur.execute(
-            "SELECT category, SUM(sum) AS total FROM items WHERE date >= %s GROUP BY category",
+            "SELECT category, ""sum""(""sum"") AS total FROM items WHERE date >= %s GROUP BY category",
             (start,),
         )
     elif period == "custom" and from_date and to_date:
         cur.execute(
-            "SELECT category, SUM(sum) AS total FROM items "
+            "SELECT category, ""sum""(""sum"") AS total FROM items "
             "WHERE date BETWEEN %s AND %s GROUP BY category",
             (from_date, to_date),
         )
