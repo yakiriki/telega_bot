@@ -217,6 +217,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # === Основний Application + FastAPI ===
 
 app = FastAPI()
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 
 application = ApplicationBuilder().token(BOT_TOKEN).build()
 
