@@ -280,6 +280,8 @@ async def on_startup():
     if not webhook_url:
         logger.error("WEBHOOK_URL не встановлено в оточенні!")
         return
+        await application.initialize()  # <--- додаємо
+        await application.start()       # <--- додаємо
     await application.bot.set_webhook(webhook_url)
     logger.info(f"✅ Вебхук встановлено на {webhook_url}")
 
