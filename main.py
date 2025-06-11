@@ -18,7 +18,7 @@ from utils.categories import categorize
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # твой публичный URL https://your.domain.com/webhook/<token>
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://your.domain.com
 
 DB_PATH = "/data/expenses.db"
 
@@ -26,7 +26,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 WAITING_NAME, WAITING_PRICE = range(2)
-
 DELETE_CHECK_ID = "DELETE_CHECK"
 DELETE_ITEM_ID = "DELETE_ITEM"
 REPORT_ALL_FROM = "REPORT_ALL_FROM"
@@ -34,7 +33,7 @@ REPORT_ALL_TO = "REPORT_ALL_TO"
 
 info_keyboard = ReplyKeyboardMarkup([["💡 Info"]], resize_keyboard=True)
 
-# === Основные команды ===
+# === Команди ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -71,7 +70,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("manual_in_progress"):
         await update.message.reply_text("❗ Продовжіть введення назви або ціни товару, або введіть /cancel.")
         return
-
     if text.lower().startswith("http"):
         items = parse_xml_url(text)
     elif "<?xml" in text:
@@ -82,7 +80,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Це не схоже на XML або URL.\nСпробуйте ще.")
         return
-
     check_id, item_ids = save_items_to_db(items, DB_PATH)
     await send_summary(update, items, check_id, item_ids)
 
@@ -116,7 +113,6 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("❌ Невірна сума. Спробуйте ще:")
         return WAITING_PRICE
-
     name = context.user_data['manual_data']['name']
     category = categorize(name)
     now = datetime.now()
@@ -214,17 +210,24 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Exception while handling update: {context.error}")
 
-# === Основний Application + FastAPI ===
+# === FastAPI app ===
 
 app = FastAPI()
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    update_data = await request.json()
+    update = Update.de_json(update_data, application.bot)
+    await application.update_queue.put(update)
+    return Response(status_code=200)
+
+# === Telegram Application ===
 
 application = ApplicationBuilder().token(BOT_TOKEN).build()
-
-# Додаємо обробники
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("info", info))
@@ -240,75 +243,50 @@ application.add_handler(CommandHandler("delete_item", delete_item))
 application.add_handler(MessageHandler(filters.Document.FileExtension("xml"), handle_file))
 application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
 
-manual_conv = ConversationHandler(
+application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("manual", manual_start)],
     states={
         WAITING_NAME: [MessageHandler(filters.TEXT & (~filters.COMMAND), manual_name)],
         WAITING_PRICE: [MessageHandler(filters.TEXT & (~filters.COMMAND), manual_price)],
     },
     fallbacks=[CommandHandler("cancel", cancel)],
-)
-application.add_handler(manual_conv)
-
-delete_check_conv = ConversationHandler(
+))
+application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("delete_check", delete_check)],
-    states={
-        DELETE_CHECK_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_check_confirm)],
-    },
+    states={DELETE_CHECK_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_check_confirm)]},
     fallbacks=[CommandHandler("cancel", cancel)],
-)
-application.add_handler(delete_check_conv)
-
-delete_item_conv = ConversationHandler(
+))
+application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("delete_item", delete_item)],
-    states={
-        DELETE_ITEM_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_item_confirm)],
-    },
+    states={DELETE_ITEM_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_item_confirm)]},
     fallbacks=[CommandHandler("cancel", cancel)],
-)
-application.add_handler(delete_item_conv)
-
-report_all_conv = ConversationHandler(
+))
+application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("report_all", report_all)],
     states={
         REPORT_ALL_FROM: [MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_from)],
         REPORT_ALL_TO: [MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_to)],
     },
     fallbacks=[CommandHandler("cancel", cancel)],
-)
-application.add_handler(report_all_conv)
+))
 
 application.add_error_handler(error_handler)
 
-# Вебхук FastAPI endpoint
+# === Встановлення вебхука при запуску FastAPI ===
 
-@app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    update_data = await request.json()
-    update = Update.de_json(update_data, application.bot)
-    await application.update_queue.put(update)
-    return Response(status_code=200)
+@app.on_event("startup")
+async def on_startup():
+    webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
+    if not webhook_url:
+        logger.error("WEBHOOK_URL не встановлено в оточенні!")
+        return
+    await application.bot.set_webhook(webhook_url)
+    logger.info(f"✅ Вебхук встановлено на {webhook_url}")
 
-# Запуск uvicorn окремо, якщо запускаєш цей файл
+# === main() — для локального запуску ===
 
 def main():
     import uvicorn
-    # Спочатку встановлюємо вебхук (один раз!)
-    import asyncio
-
-    async def set_webhook():
-        webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
-
-
-        if not webhook_url:
-            logger.error("WEBHOOK_URL не встановлено в оточенні!")
-            return
-        await application.bot.set_webhook(webhook_url)
-        logger.info(f"Вебхук встановлено на {webhook_url}")
-
-    asyncio.run(set_webhook())
-
-    # Запускаємо uvicorn сервер
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8443")), log_level="info")
 
 if __name__ == "__main__":
