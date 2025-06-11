@@ -212,7 +212,7 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db(DATABASE_URL)
+    init_db(DATABASE_URL)
     yield
 
 app = FastAPI(lifespan=lifespan)
