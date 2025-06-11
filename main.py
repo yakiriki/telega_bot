@@ -297,7 +297,8 @@ def main():
     import asyncio
 
     async def set_webhook():
-        webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+        webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
+
 
         if not webhook_url:
             logger.error("WEBHOOK_URL не встановлено в оточенні!")
