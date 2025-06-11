@@ -297,7 +297,7 @@ def main():
     import asyncio
 
     async def set_webhook():
-        webhook_url = f"{WEBHOOK_URL}/webhook/{BOT_TOKEN}"
+        webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
 
         if not webhook_url:
             logger.error("WEBHOOK_URL не встановлено в оточенні!")
