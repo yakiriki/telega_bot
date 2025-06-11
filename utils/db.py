@@ -2,7 +2,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime, timedelta
 
-DB_URL = None  # сюди запишемо URL бази через init_db
+DB_URL = None
 
 def init_db(url: str):
     global DB_URL
@@ -10,26 +10,22 @@ def init_db(url: str):
 
 def get_connection():
     if not DB_URL:
-        raise RuntimeError(
-            "DATABASE_URL не ініціалізовано! Викличте init_db(DATABASE_URL) перед зверненням до БД."
-        )
+        raise RuntimeError("DATABASE_URL не ініціалізовано! Викличте init_db(DATABASE_URL).")
     return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 
 def save_items_to_db(items):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("INSERT INTO checks (created_at) VALUES (%s) RETURNING id", (datetime.now(),))
-    check_id = cur.fetchone()["id"]
-
+    cur.execute("INSERT INTO checks DEFAULT VALUES RETURNING id;")
+    check_id = cur.fetchone()[0]
     item_ids = []
     for item in items:
         cur.execute(
-            "INSERT INTO items (check_id, name, category, amount, date) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (check_id, item["name"], item["category"], item["""sum"""], item["date"]),
+            'INSERT INTO items (check_id, date, name, category, "sum") '
+            'VALUES (%s, %s, %s, %s, %s) RETURNING id',
+            (check_id, item["date"], item["name"], item["category"], item["sum"]),
         )
-        item_ids.append(cur.fetchone()["id"])
-
+        item_ids.append(cur.fetchone()[0])
     conn.commit()
     cur.close()
     conn.close()
@@ -37,35 +33,32 @@ def save_items_to_db(items):
 
 def get_report(period, from_date=None, to_date=None):
     conn = get_connection()
-    cur = conn.cursor()
-
+    cur = conn.cursor(cursor_factory=RealDictCursor)
     if period == "day":
-        start = datetime.now().date()
         cur.execute(
-            "SELECT category, ""sum""(""sum"") AS total FROM items WHERE date = %s GROUP BY category",
-            (start,),
+            'SELECT category, SUM("sum") AS total FROM items '
+            'WHERE date = CURRENT_DATE GROUP BY category;'
         )
     elif period == "week":
-        start = datetime.now().date() - timedelta(days=7)
         cur.execute(
-            "SELECT category, ""sum""(""sum"") AS total FROM items WHERE date >= %s GROUP BY category",
-            (start,),
+            'SELECT category, SUM("sum") AS total FROM items '
+            'WHERE date >= CURRENT_DATE - INTERVAL \'7 days\' GROUP BY category;'
         )
     elif period == "month":
-        start = datetime.now().date().replace(day=1)
         cur.execute(
-            "SELECT category, ""sum""(""sum"") AS total FROM items WHERE date >= %s GROUP BY category",
-            (start,),
+            'SELECT category, SUM("sum") AS total FROM items '
+            'WHERE date >= date_trunc(\'month\', CURRENT_DATE) GROUP BY category;'
         )
     elif period == "custom" and from_date and to_date:
         cur.execute(
-            "SELECT category, ""sum""(""sum"") AS total FROM items "
-            "WHERE date BETWEEN %s AND %s GROUP BY category",
+            'SELECT category, SUM("sum") AS total FROM items '
+            'WHERE date BETWEEN %s AND %s GROUP BY category;',
             (from_date, to_date),
         )
     else:
-        return {}
-
+        cur.execute(
+            'SELECT category, SUM("sum") AS total FROM items GROUP BY category;'
+        )
     rows = cur.fetchall()
     cur.close()
     conn.close()
@@ -74,32 +67,27 @@ def get_report(period, from_date=None, to_date=None):
 def get_debug_info():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) AS cnt FROM checks")
-    checks = cur.fetchone()["cnt"]
-    cur.execute("SELECT COUNT(*) AS cnt FROM items")
-    items = cur.fetchone()["cnt"]
-    cur.close()
+    cur.execute("SELECT COUNT(*) FROM checks;")
+    checks = cur.fetchone()[0]
+    cur.execute("SELECT COUNT(*) FROM items;")
+    items = cur.fetchone()[0]
     conn.close()
     return {"checks": checks, "items": items}
 
 def delete_check_by_id(check_id):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("DELETE FROM items WHERE check_id = %s", (check_id,))
-    cur.execute("DELETE FROM checks WHERE id = %s", (check_id,))
+    cur.execute("DELETE FROM checks WHERE id = %s RETURNING id;", (check_id,))
+    deleted = bool(cur.fetchone())
     conn.commit()
-    # тепер перевіримо, чи видалено хоча б один рядок
-    deleted = cur.rowcount > 0
-    cur.close()
     conn.close()
     return deleted
 
 def delete_item_by_id(item_id):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("DELETE FROM items WHERE id = %s", (item_id,))
+    cur.execute("DELETE FROM items WHERE id = %s RETURNING id;", (item_id,))
+    deleted = bool(cur.fetchone())
     conn.commit()
-    deleted = cur.rowcount > 0
-    cur.close()
     conn.close()
     return deleted
