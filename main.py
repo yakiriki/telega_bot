@@ -1,7 +1,9 @@
 import os
 import logging
+
 from datetime import datetime
 from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -17,34 +19,25 @@ from parsers.xml_parser import parse_xml_file, parse_xml_string, parse_xml_url
 from utils.db import init_db, save_items_to_db, get_report, get_debug_info, delete_check_by_id, delete_item_by_id
 from utils.categories import categorize
 
-# Завантажуємо токен і URL з .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Логування
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Стани для ConversationHandler
 WAITING_NAME, WAITING_PRICE = range(2)
 DELETE_CHECK_ID = "DELETE_CHECK"
 DELETE_ITEM_ID = "DELETE_ITEM"
 REPORT_ALL_FROM = "REPORT_ALL_FROM"
 REPORT_ALL_TO = "REPORT_ALL_TO"
 
-# Клавіатура Info
 info_keyboard = ReplyKeyboardMarkup([["💡 Info"]], resize_keyboard=True)
 
-# ==========================
-# ===  Команди бота  ======
-# ==========================
+# === Команди ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Відправляє привітальне повідомлення з переліком команд
-    """
     msg = (
         "👋 Привіт! Я бот для обліку витрат по чеках.\n\n"
         "📌 Список команд:\n"
@@ -62,19 +55,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=info_keyboard)
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Просто перенаправляє в start(), щоб не дублювати текст
-    """
     await start(update, context)
 
-# ==========================
-# ===  Обробка XML  ======
-# ==========================
+# === Обробка XML ===
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Приймає XML-файл з чеком, парсить, зберігає і відправляє підсумок
-    """
     file = await update.message.document.get_file()
     file_path = f"/tmp/{file.file_id}.xml"
     await file.download_to_drive(file_path)
@@ -83,18 +68,10 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_summary(update, items, check_id, item_ids)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    "Пійманий" catch-all-обробник для тексту,
-    але спрацює тільки після ConversationHandlers!
-    """
     text = update.message.text.strip()
-    # Перевіряємо, чи не у стані manual
     if context.user_data.get("manual_in_progress"):
-        await update.message.reply_text(
-            "❗ Продовжіть введення назви або ціни товару, або введіть /cancel."
-        )
+        await update.message.reply_text("❗ Продовжіть введення назви або ціни товару, або введіть /cancel.")
         return
-    # Обробка URL чи raw XML
     if text.lower().startswith("http"):
         items = parse_xml_url(text)
     elif "<?xml" in text:
@@ -103,55 +80,36 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await info(update, context)
         return
     else:
-        await update.message.reply_text(
-            "❌ Це не схоже на XML або URL.\nСпробуйте ще."
-        )
+        await update.message.reply_text("❌ Це не схоже на XML або URL.\nСпробуйте ще.")
         return
     check_id, item_ids = save_items_to_db(items)
     await send_summary(update, items, check_id, item_ids)
 
 async def send_summary(update, items, check_id, item_ids):
-    """
-    Відправляє зведення по доданому чеку
-    """
     if not items:
         await update.message.reply_text("❌ Не вдалося знайти товари в цьому чеку.")
         return
     text = f"✅ Додано чек #{check_id}:\n"
     total = 0
     for item, item_id in zip(items, item_ids):
-        text += (
-            f"• ID {item_id} — {item['name']} ({item['category']}) —"
-            f" {item['sum']/100:.2f} грн\n"
-        )
+        text += f"• ID {item_id} — {item['name']} ({item['category']}) — {item['sum'] / 100:.2f} грн\n"
         total += item['sum']
-    text += f"\n💰 Всього: {total/100:.2f} грн"
+    text += f"\n💰 Всього: {total / 100:.2f} грн"
     await update.message.reply_text(text)
 
-# ==========================
-# ===  Вручну  ===========
-# ==========================
+# === Вручну ===
 
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Початок діалогу для ручного додавання
-    """
     context.user_data["manual_in_progress"] = True
     await update.message.reply_text("Введіть назву товару:")
     return WAITING_NAME
 
 async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Отримуємо назву, питаємо ціну
-    """
     context.user_data['manual_data'] = {'name': update.message.text}
     await update.message.reply_text("Введіть суму в грн (наприклад, 23.50):")
     return WAITING_PRICE
 
 async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Отримуємо ціну, зберігаємо item і завершуємо діалог
-    """
     try:
         price = float(update.message.text.replace(",", "."))
     except ValueError:
@@ -164,38 +122,25 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "date": now.strftime("%Y-%m-%d"),
         "name": name,
         "category": category,
-        "sum": int(price*100)
+        "sum": int(price * 100)
     }
     check_id, item_ids = save_items_to_db([item])
-    await update.message.reply_text(
-        f"✅ Додано: ID {item_ids[0]} — {name} ({category}) — {price:.2f} грн"
-    )
+    await update.message.reply_text(f"✅ Додано: ID {item_ids[0]} — {name} ({category}) — {price:.2f} грн")
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Загальний cancel для будь-якого діалогу
-    """
     context.user_data.clear()
     await update.message.reply_text("Скасовано.")
     return ConversationHandler.END
 
-# ==========================
-# ===  Видалення  ========
-# ==========================
+# === Видалення ===
 
 async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Старт діалогу видалення чеку
-    """
     await update.message.reply_text("Введіть ID чеку для видалення:")
     return DELETE_CHECK_ID
 
 async def delete_check_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Підтвердження видалення чеку
-    """
     check_id = update.message.text.strip()
     success = delete_check_by_id(check_id)
     msg = "✅ Чек видалено." if success else "❌ Не знайдено чек."
@@ -203,25 +148,17 @@ async def delete_check_confirm(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Старт діалогу видалення товару
-    """
     await update.message.reply_text("Введіть ID товару для видалення:")
     return DELETE_ITEM_ID
 
 async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Підтвердження видалення товару
-    """
     item_id = update.message.text.strip()
     success = delete_item_by_id(item_id)
     msg = "✅ Товар видалено." if success else "❌ Не знайдено товар."
     await update.message.reply_text(msg)
     return ConversationHandler.END
 
-# ==========================
-# ===   Звіти    ========
-# ==========================
+# === Звіти ===
 
 async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = get_report("day")
@@ -240,114 +177,134 @@ async def report_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return REPORT_ALL_FROM
 
 async def report_all_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['from_date'] = update.message.text.strip()
+    from_date = update.message.text.strip()
+    context.user_data['from_date'] = from_date
     await update.message.reply_text("Введіть дату кінця у форматі YYYY-MM-DD:")
     return REPORT_ALL_TO
 
 async def report_all_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     to_date = update.message.text.strip()
-    from_date = context.user_data['from_date']
+    from_date = context.user_data.get('from_date')
     data = get_report("custom", from_date=from_date, to_date=to_date)
     await send_report(update, data, f"з {from_date} по {to_date}")
+    context.user_data.clear()
     return ConversationHandler.END
 
-# ==========================
-# === Технічний debug =====
-# ==========================
+async def send_report(update, data, period):
+    if not data:
+        await update.message.reply_text(f"❗ Немає даних за період {period}.")
+        return
+    text = f"📊 Звіт {period}:\n"
+    total = 0
+    for category, amount in data.items():
+        text += f"• {category}: {amount / 100:.2f} грн\n"
+        total += amount
+    text += f"\n💰 Всього: {total / 100:.2f} грн"
+    await update.message.reply_text(text)
+
+# === Debug ===
 
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = get_debug_info()
-    await update.message.reply_text(f"🐞 Debug info:\n{info}")
+    await update.message.reply_text(f"Debug info:\n{info}")
 
-# ==========================
-# === Обробники помилок ===
-# ==========================
+# === Lifespan ===
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(f"Exception while handling update: {context.error}")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db(DATABASE_URL)
+    yield
 
-# ==========================
-# === Налаштування FastAPI + Lifespan ===
-# ==========================
+app = FastAPI(lifespan=lifespan)
 
-# Ініціалізуємо Telegram-клієнт
 application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# --- Додаємо CommandHandler-и для простих команд ---
+# === ConversationHandlers с ИСПРАВЛЕНИЯМИ ===
+
+manual_conv = ConversationHandler(
+    entry_points=[CommandHandler("manual", manual_start)],
+    states={
+        WAITING_NAME: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name),
+            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
+            CommandHandler("manual", manual_start),  # ИСПРАВЛЕНО, чтобы перезапустить manual
+        ],
+        WAITING_PRICE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price),
+            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
+            CommandHandler("manual", manual_start),  # ИСПРАВЛЕНО
+        ],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+delete_check_conv = ConversationHandler(
+    entry_points=[CommandHandler("delete_check", delete_check)],
+    states={
+        DELETE_CHECK_ID: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm),
+            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
+            CommandHandler("delete_check", delete_check),  # ИСПРАВЛЕНО
+        ],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+delete_item_conv = ConversationHandler(
+    entry_points=[CommandHandler("delete_item", delete_item)],
+    states={
+        DELETE_ITEM_ID: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm),
+            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
+            CommandHandler("delete_item", delete_item),  # ИСПРАВЛЕНО
+        ],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+report_all_conv = ConversationHandler(
+    entry_points=[CommandHandler("report_all", report_all)],
+    states={
+        REPORT_ALL_FROM: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from),
+            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
+            CommandHandler("report_all", report_all),  # ИСПРАВЛЕНО
+        ],
+        REPORT_ALL_TO: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to),
+            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
+            CommandHandler("report_all", report_all),  # ИСПРАВЛЕНО
+        ],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+# === Добавление обработчиков ===
+
+application.add_handler(manual_conv)
+application.add_handler(delete_check_conv)
+application.add_handler(delete_item_conv)
+application.add_handler(report_all_conv)
+
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("info", info))
-application.add_handler(CommandHandler("debug", debug))
 application.add_handler(CommandHandler("report_day", report_day))
 application.add_handler(CommandHandler("report_week", report_week))
 application.add_handler(CommandHandler("report_mounth", report_mounth))
+application.add_handler(CommandHandler("debug", debug))
 
-# --- ConversationHandler-и для діалогів ---
-# Ручне додавання
-application.add_handler(ConversationHandler(
-    entry_points=[CommandHandler("manual", manual_start)],
-    states={
-        WAITING_NAME: [MessageHandler(filters.TEXT & (~filters.COMMAND), manual_name)],
-        WAITING_PRICE: [MessageHandler(filters.TEXT & (~filters.COMMAND), manual_price)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-))
-# Видалення чеку
-application.add_handler(ConversationHandler(
-    entry_points=[CommandHandler("delete_check", delete_check)],
-    states={DELETE_CHECK_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_check_confirm)]},
-    fallbacks=[CommandHandler("cancel", cancel)],
-))
-# Видалення товару
-application.add_handler(ConversationHandler(
-    entry_points=[CommandHandler("delete_item", delete_item)],
-    states={DELETE_ITEM_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_item_confirm)]},
-    fallbacks=[CommandHandler("cancel", cancel)],
-))
-# Звіт на вибраний період
-application.add_handler(ConversationHandler(
-    entry_points=[CommandHandler("report_all", report_all)],
-    states={
-        REPORT_ALL_FROM: [MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_from)],
-        REPORT_ALL_TO:   [MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_to)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-))
-
-# --- Catch-all MessageHandler для XML/URL/Info ---
-#   * Цей обробник ОСТАННІЙ, щоб ConversationHandler-и спрацьовували першими!
 application.add_handler(MessageHandler(filters.Document.FileExtension("xml"), handle_file))
-application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-# Додаємо глобальний обробник помилок
-application.add_error_handler(error_handler)
-
-# FastAPI
-
-app = FastAPI(lifespan=asynccontextmanager(lambda app: (yield)))
-
-@app.on_event("startup")
-async def on_startup():
-    # Ініціалізуємо базу та webhook
-    init_db(DATABASE_URL)
-    await application.initialize()
-    await application.start()
-    webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
-    await application.bot.set_webhook(webhook_url)
-    logger.info(f"✅ Вебхук встановлено на {webhook_url}")
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
+# === Webhook ===
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    # Приймаємо апдейт від Telegram
-    update_data = await request.json()
-    update = Update.de_json(update_data, application.bot)
+    update = Update.de_json(await request.json(), application.bot)
     await application.update_queue.put(update)
-    return Response(status_code=200)
+    return Response()
 
-# Локальний запуск
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8443")), log_level="info")
+
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
