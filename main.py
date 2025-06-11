@@ -2,6 +2,8 @@ import os
 import logging
 from datetime import datetime
 from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -18,8 +20,7 @@ from utils.categories import categorize
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://your.domain.com
-
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 DB_PATH = "/data/expenses.db"
 
 logging.basicConfig(level=logging.INFO)
@@ -210,24 +211,9 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Exception while handling update: {context.error}")
 
-# === FastAPI app ===
-application = ApplicationBuilder().token(BOT_TOKEN).build()
-app = FastAPI()
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-@app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    update_data = await request.json()
-    update = Update.de_json(update_data, application.bot)
-    await application.update_queue.put(update)
-    return Response(status_code=200)
-
 # === Telegram Application ===
 
-
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("info", info))
@@ -269,23 +255,36 @@ application.add_handler(ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 ))
-
 application.add_error_handler(error_handler)
 
-# === Встановлення вебхука при запуску FastAPI ===
+# === FastAPI Lifespan ===
 
-@app.on_event("startup")
-async def on_startup():
-    webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}" if WEBHOOK_URL else None
     if not webhook_url:
-        logger.error("WEBHOOK_URL не встановлено в оточенні!")
+        logger.error("❌ WEBHOOK_URL не встановлено в середовищі!")
+        yield
         return
-        await application.initialize()  # <--- додаємо
-        await application.start()       # <--- додаємо
+    await application.initialize()
+    await application.start()
     await application.bot.set_webhook(webhook_url)
     logger.info(f"✅ Вебхук встановлено на {webhook_url}")
+    yield
+    await application.stop()
 
-# === main() — для локального запуску ===
+app = FastAPI(lifespan=lifespan)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    update_data = await request.json()
+    update = Update.de_json(update_data, application.bot)
+    await application.update_queue.put(update)
+    return Response(status_code=200)
 
 def main():
     import uvicorn
