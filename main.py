@@ -21,7 +21,7 @@ from utils.categories import categorize
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-DB_PATH = "/data/expenses.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_path = f"/tmp/{file.file_id}.xml"
     await file.download_to_drive(file_path)
     items = parse_xml_file(file_path)
-    check_id, item_ids = save_items_to_db(items, DB_PATH)
+    check_id, item_ids = save_items_to_db(items)
     await send_summary(update, items, check_id, item_ids)
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,7 +81,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ Це не схоже на XML або URL.\nСпробуйте ще.")
         return
-    check_id, item_ids = save_items_to_db(items, DB_PATH)
+    check_id, item_ids = save_items_to_db(items)
     await send_summary(update, items, check_id, item_ids)
 
 async def send_summary(update, items, check_id, item_ids):
@@ -123,7 +123,7 @@ async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "category": category,
         "sum": int(price * 100)
     }
-    check_id, item_ids = save_items_to_db([item], DB_PATH)
+    check_id, item_ids = save_items_to_db([item])
     await update.message.reply_text(f"✅ Додано: ID {item_ids[0]} — {name} ({category}) — {price:.2f} грн")
     context.user_data.clear()
     return ConversationHandler.END
@@ -141,7 +141,7 @@ async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delete_check_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     check_id = update.message.text.strip()
-    success = delete_check_by_id(DB_PATH, check_id)
+    success = delete_check_by_id(check_id)
     msg = "✅ Чек видалено." if success else "❌ Не знайдено чек."
     await update.message.reply_text(msg)
     return ConversationHandler.END
@@ -152,7 +152,7 @@ async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item_id = update.message.text.strip()
-    success = delete_item_by_id(DB_PATH, item_id)
+    success = delete_item_by_id(item_id)
     msg = "✅ Товар видалено." if success else "❌ Не знайдено товар."
     await update.message.reply_text(msg)
     return ConversationHandler.END
@@ -160,15 +160,15 @@ async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
 # === Звіти ===
 
 async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_report(DB_PATH, "day")
+    data = get_report("day")
     await send_report(update, data, "за сьогодні")
 
 async def report_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_report(DB_PATH, "week")
+    data = get_report("week")
     await send_report(update, data, "за тиждень")
 
 async def report_mounth(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = get_report(DB_PATH, "month")
+    data = get_report("month")
     await send_report(update, data, "за місяць")
 
 async def report_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -184,7 +184,7 @@ async def report_all_from(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def report_all_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     to_date = update.message.text.strip()
     from_date = context.user_data.get('from_date')
-    data = get_report(DB_PATH, "custom", from_date=from_date, to_date=to_date)
+    data = get_report("custom", from_date=from_date, to_date=to_date)
     await send_report(update, data, f"з {from_date} по {to_date}")
     return ConversationHandler.END
 
@@ -203,7 +203,7 @@ async def send_report(update, data, period_desc):
 # === Debug ===
 
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    info = get_debug_info(DB_PATH)
+    info = get_debug_info()
     await update.message.reply_text(f"🐞 Debug info:\n{info}")
 
 # === Обробники помилок ===
@@ -266,7 +266,7 @@ async def lifespan(app: FastAPI):
         logger.error("❌ WEBHOOK_URL не встановлено в середовищі!")
         yield
         return
-    init_db(DB_PATH)
+    init_db(DATABASE_URL)
     await application.initialize()
     await application.start()
     await application.bot.set_webhook(webhook_url)
