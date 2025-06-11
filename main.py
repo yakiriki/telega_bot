@@ -266,6 +266,7 @@ async def lifespan(app: FastAPI):
         logger.error("❌ WEBHOOK_URL не встановлено в середовищі!")
         yield
         return
+    init_db(DB_PATH)
     await application.initialize()
     await application.start()
     await application.bot.set_webhook(webhook_url)
