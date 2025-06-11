@@ -17,7 +17,7 @@ from utils.db import init_db, save_items_to_db, get_report, get_debug_info, dele
 from utils.categories import categorize
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # твой публичный URL https://your.domain.com/webhook/<token>
 
 DB_PATH = "/data/expenses.db"
