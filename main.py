@@ -218,43 +218,74 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# Сначала ConversationHandler-ы
+# === Общий обработчик команд, чтобы работали всегда ===
+command_handlers = [
+    CommandHandler("start", start),
+    CommandHandler("info", info),
+    CommandHandler("debug", debug),
+    CommandHandler("report_day", report_day),
+    CommandHandler("report_week", report_week),
+    CommandHandler("report_mounth", report_mounth),
+    CommandHandler("cancel", cancel),
+]
+for handler in command_handlers:
+    application.add_handler(handler)
+
+# === ConversationHandler-ы ===
 application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("manual", manual_start)],
     states={
-        WAITING_NAME: [MessageHandler(filters.TEXT & (~filters.COMMAND), manual_name)],
-        WAITING_PRICE: [MessageHandler(filters.TEXT & (~filters.COMMAND), manual_price)],
+        WAITING_NAME: [
+            MessageHandler(filters.TEXT & (~filters.COMMAND), manual_name),
+            *command_handlers  # Команды обрабатываются всегда!
+        ],
+        WAITING_PRICE: [
+            MessageHandler(filters.TEXT & (~filters.COMMAND), manual_price),
+            *command_handlers
+        ],
     },
-    fallbacks=[CommandHandler("cancel", cancel)],
+    fallbacks=[CommandHandler("cancel", cancel), *command_handlers],
+    allow_reentry=True,
 ))
 application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("delete_check", delete_check)],
-    states={DELETE_CHECK_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_check_confirm)]},
-    fallbacks=[CommandHandler("cancel", cancel)],
+    states={
+        DELETE_CHECK_ID: [
+            MessageHandler(filters.TEXT & (~filters.COMMAND), delete_check_confirm),
+            *command_handlers
+        ]
+    },
+    fallbacks=[CommandHandler("cancel", cancel), *command_handlers],
+    allow_reentry=True,
 ))
 application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("delete_item", delete_item)],
-    states={DELETE_ITEM_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_item_confirm)]},
-    fallbacks=[CommandHandler("cancel", cancel)],
+    states={
+        DELETE_ITEM_ID: [
+            MessageHandler(filters.TEXT & (~filters.COMMAND), delete_item_confirm),
+            *command_handlers
+        ]
+    },
+    fallbacks=[CommandHandler("cancel", cancel), *command_handlers],
+    allow_reentry=True,
 ))
 application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("report_all", report_all)],
     states={
-        REPORT_ALL_FROM: [MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_from)],
-        REPORT_ALL_TO: [MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_to)],
+        REPORT_ALL_FROM: [
+            MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_from),
+            *command_handlers
+        ],
+        REPORT_ALL_TO: [
+            MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_to),
+            *command_handlers
+        ],
     },
-    fallbacks=[CommandHandler("cancel", cancel)],
+    fallbacks=[CommandHandler("cancel", cancel), *command_handlers],
+    allow_reentry=True,
 ))
 
-# Затем обычные команды
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("info", info))
-application.add_handler(CommandHandler("debug", debug))
-application.add_handler(CommandHandler("report_day", report_day))
-application.add_handler(CommandHandler("report_week", report_week))
-application.add_handler(CommandHandler("report_mounth", report_mounth))
-
-# И только потом универсальные текстовые обработчики
+# === Универсальные текстовые и файловые обработчики ===
 application.add_handler(MessageHandler(filters.Document.FileExtension("xml"), handle_file))
 application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
 
