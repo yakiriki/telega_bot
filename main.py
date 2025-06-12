@@ -187,17 +187,16 @@ async def report_all_to(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from_date = context.user_data.get('from_date')
     data = get_report("custom", from_date=from_date, to_date=to_date)
     await send_report(update, data, f"з {from_date} по {to_date}")
-    context.user_data.clear()
     return ConversationHandler.END
 
-async def send_report(update, data, period):
+async def send_report(update, data, period_desc):
     if not data:
-        await update.message.reply_text(f"❗ Немає даних за період {period}.")
+        await update.message.reply_text(f"ℹ️ За період {period_desc} даних немає.")
         return
-    text = f"📊 Звіт {period}:\n"
+    text = f"📊 Звіт {period_desc}:\n"
     total = 0
-    for category, amount in data.items():
-        text += f"• {category}: {amount / 100:.2f} грн\n"
+    for cat, amount in data.items():
+        text += f"• {cat}: {amount / 100:.2f} грн\n"
         total += amount
     text += f"\n💰 Всього: {total / 100:.2f} грн"
     await update.message.reply_text(text)
@@ -206,105 +205,92 @@ async def send_report(update, data, period):
 
 async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = get_debug_info()
-    await update.message.reply_text(f"Debug info:\n{info}")
+    await update.message.reply_text(f"🐞 Debug info:\n{info}")
 
-# === Lifespan ===
+# === Обробники помилок ===
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db(DATABASE_URL)
-    yield
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(f"Exception while handling update: {context.error}")
 
-app = FastAPI(lifespan=lifespan)
+# === Telegram Application ===
 
 application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# === ConversationHandlers с ИСПРАВЛЕНИЯМИ ===
-
-manual_conv = ConversationHandler(
-    entry_points=[CommandHandler("manual", manual_start)],
-    states={
-        WAITING_NAME: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, manual_name),
-            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
-            CommandHandler("manual", manual_start),  # ИСПРАВЛЕНО, чтобы перезапустить manual
-        ],
-        WAITING_PRICE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, manual_price),
-            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
-            CommandHandler("manual", manual_start),  # ИСПРАВЛЕНО
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-delete_check_conv = ConversationHandler(
-    entry_points=[CommandHandler("delete_check", delete_check)],
-    states={
-        DELETE_CHECK_ID: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, delete_check_confirm),
-            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
-            CommandHandler("delete_check", delete_check),  # ИСПРАВЛЕНО
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-delete_item_conv = ConversationHandler(
-    entry_points=[CommandHandler("delete_item", delete_item)],
-    states={
-        DELETE_ITEM_ID: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, delete_item_confirm),
-            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
-            CommandHandler("delete_item", delete_item),  # ИСПРАВЛЕНО
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-report_all_conv = ConversationHandler(
-    entry_points=[CommandHandler("report_all", report_all)],
-    states={
-        REPORT_ALL_FROM: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_from),
-            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
-            CommandHandler("report_all", report_all),  # ИСПРАВЛЕНО
-        ],
-        REPORT_ALL_TO: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, report_all_to),
-            CommandHandler("cancel", cancel),  # ИСПРАВЛЕНО
-            CommandHandler("report_all", report_all),  # ИСПРАВЛЕНО
-        ],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-)
-
-# === Добавление обработчиков ===
-
-application.add_handler(manual_conv)
-application.add_handler(delete_check_conv)
-application.add_handler(delete_item_conv)
-application.add_handler(report_all_conv)
-
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("info", info))
+application.add_handler(CommandHandler("debug", debug))
 application.add_handler(CommandHandler("report_day", report_day))
 application.add_handler(CommandHandler("report_week", report_week))
 application.add_handler(CommandHandler("report_mounth", report_mounth))
-application.add_handler(CommandHandler("debug", debug))
+application.add_handler(CommandHandler("report_all", report_all))
+application.add_handler(CommandHandler("manual", manual_start))
+application.add_handler(CommandHandler("delete_check", delete_check))
+application.add_handler(CommandHandler("delete_item", delete_item))
 
 application.add_handler(MessageHandler(filters.Document.FileExtension("xml"), handle_file))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
 
-# === Webhook ===
+application.add_handler(ConversationHandler(
+    entry_points=[CommandHandler("manual", manual_start)],
+    states={
+        WAITING_NAME: [MessageHandler(filters.TEXT & (~filters.COMMAND), manual_name)],
+        WAITING_PRICE: [MessageHandler(filters.TEXT & (~filters.COMMAND), manual_price)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+))
+application.add_handler(ConversationHandler(
+    entry_points=[CommandHandler("delete_check", delete_check)],
+    states={DELETE_CHECK_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_check_confirm)]},
+    fallbacks=[CommandHandler("cancel", cancel)],
+))
+application.add_handler(ConversationHandler(
+    entry_points=[CommandHandler("delete_item", delete_item)],
+    states={DELETE_ITEM_ID: [MessageHandler(filters.TEXT & (~filters.COMMAND), delete_item_confirm)]},
+    fallbacks=[CommandHandler("cancel", cancel)],
+))
+application.add_handler(ConversationHandler(
+    entry_points=[CommandHandler("report_all", report_all)],
+    states={
+        REPORT_ALL_FROM: [MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_from)],
+        REPORT_ALL_TO: [MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_to)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+))
+application.add_error_handler(error_handler)
+
+# === FastAPI Lifespan ===
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}" if WEBHOOK_URL else None
+    if not webhook_url:
+        logger.error("❌ WEBHOOK_URL не встановлено в середовищі!")
+        yield
+        return
+    init_db(DATABASE_URL)
+    await application.initialize()
+    await application.start()
+    await application.bot.set_webhook(webhook_url)
+    logger.info(f"✅ Вебхук встановлено на {webhook_url}")
+    yield
+    await application.stop()
+
+app = FastAPI(lifespan=lifespan)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    update = Update.de_json(await request.json(), application.bot)
+    update_data = await request.json()
+    update = Update.de_json(update_data, application.bot)
     await application.update_queue.put(update)
-    return Response()
+    return Response(status_code=200)
+
+def main():
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8443")), log_level="info")
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    main()
