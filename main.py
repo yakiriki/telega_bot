@@ -33,7 +33,7 @@ REPORT_ALL_TO = "REPORT_ALL_TO"
 
 info_keyboard = ReplyKeyboardMarkup([["💡 Info"]], resize_keyboard=True)
 
-# === Команди ===
+# === Команды ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
@@ -55,7 +55,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
-# === Обробка XML ===
+# === Обработка XML ===
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = await update.message.document.get_file()
@@ -95,7 +95,7 @@ async def send_summary(update, items, check_id, item_ids):
     text += f"\n💰 Всього: {total / 100:.2f} грн"
     await update.message.reply_text(text)
 
-# === Вручну ===
+# === Вручную ===
 
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["manual_in_progress"] = True
@@ -132,7 +132,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Скасовано.")
     return ConversationHandler.END
 
-# === Видалення ===
+# === УНИВЕРСАЛЬНЫЙ обработчик команд внутри состояний для выхода из любого диалога ===
+async def universal_command_exit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Можно по желанию показывать сообщение
+    await update.message.reply_text("Дія перервана. Виконую команду.")
+    return ConversationHandler.END
+
+# === Удаление ===
 
 async def delete_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Введіть ID чеку для видалення:")
@@ -156,7 +162,7 @@ async def delete_item_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(msg)
     return ConversationHandler.END
 
-# === Звіти ===
+# === Отчеты ===
 
 async def report_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = get_report("day")
@@ -205,10 +211,8 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
     info = get_debug_info()
     await update.message.reply_text(f"🐞 Debug info:\n{info}")
 
-# === Обробники помилок ===
-
+# === Error Handler ===
 import traceback
-
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Exception while handling update: {context.error}")
     traceback_str = ''.join(traceback.format_exception(None, context.error, context.error.__traceback__))
@@ -218,74 +222,128 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# === Общий обработчик команд, чтобы работали всегда ===
-command_handlers = [
-    CommandHandler("start", start),
-    CommandHandler("info", info),
-    CommandHandler("debug", debug),
-    CommandHandler("report_day", report_day),
-    CommandHandler("report_week", report_week),
-    CommandHandler("report_mounth", report_mounth),
-    CommandHandler("cancel", cancel),
-]
-for handler in command_handlers:
-    application.add_handler(handler)
+# === Командные обработчики (глобальные) ===
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("info", info))
+application.add_handler(CommandHandler("debug", debug))
+application.add_handler(CommandHandler("report_day", report_day))
+application.add_handler(CommandHandler("report_week", report_week))
+application.add_handler(CommandHandler("report_mounth", report_mounth))
+application.add_handler(CommandHandler("manual", manual_start))
+application.add_handler(CommandHandler("delete_check", delete_check))
+application.add_handler(CommandHandler("delete_item", delete_item))
+application.add_handler(CommandHandler("report_all", report_all))
+application.add_handler(CommandHandler("cancel", cancel))
 
-# === ConversationHandler-ы ===
+# === ConversationHandler для ручного ввода ===
 application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("manual", manual_start)],
     states={
         WAITING_NAME: [
             MessageHandler(filters.TEXT & (~filters.COMMAND), manual_name),
-            *command_handlers  # Команды обрабатываются всегда!
+            MessageHandler(filters.COMMAND, universal_command_exit),  # Любая команда = выход из диалога
         ],
         WAITING_PRICE: [
             MessageHandler(filters.TEXT & (~filters.COMMAND), manual_price),
-            *command_handlers
+            MessageHandler(filters.COMMAND, universal_command_exit),
         ],
     },
-    fallbacks=[CommandHandler("cancel", cancel), *command_handlers],
+    fallbacks=[
+        CommandHandler("cancel", cancel),
+        CommandHandler("start", start),
+        CommandHandler("info", info),
+        CommandHandler("debug", debug),
+        CommandHandler("report_day", report_day),
+        CommandHandler("report_week", report_week),
+        CommandHandler("report_mounth", report_mounth),
+        CommandHandler("manual", manual_start),
+        CommandHandler("delete_check", delete_check),
+        CommandHandler("delete_item", delete_item),
+        CommandHandler("report_all", report_all),
+    ],
     allow_reentry=True,
 ))
+
+# === ConversationHandler для удаления чека ===
 application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("delete_check", delete_check)],
     states={
         DELETE_CHECK_ID: [
             MessageHandler(filters.TEXT & (~filters.COMMAND), delete_check_confirm),
-            *command_handlers
+            MessageHandler(filters.COMMAND, universal_command_exit),
         ]
     },
-    fallbacks=[CommandHandler("cancel", cancel), *command_handlers],
+    fallbacks=[
+        CommandHandler("cancel", cancel),
+        CommandHandler("start", start),
+        CommandHandler("info", info),
+        CommandHandler("debug", debug),
+        CommandHandler("report_day", report_day),
+        CommandHandler("report_week", report_week),
+        CommandHandler("report_mounth", report_mounth),
+        CommandHandler("manual", manual_start),
+        CommandHandler("delete_check", delete_check),
+        CommandHandler("delete_item", delete_item),
+        CommandHandler("report_all", report_all),
+    ],
     allow_reentry=True,
 ))
+
+# === ConversationHandler для удаления товара ===
 application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("delete_item", delete_item)],
     states={
         DELETE_ITEM_ID: [
             MessageHandler(filters.TEXT & (~filters.COMMAND), delete_item_confirm),
-            *command_handlers
+            MessageHandler(filters.COMMAND, universal_command_exit),
         ]
     },
-    fallbacks=[CommandHandler("cancel", cancel), *command_handlers],
+    fallbacks=[
+        CommandHandler("cancel", cancel),
+        CommandHandler("start", start),
+        CommandHandler("info", info),
+        CommandHandler("debug", debug),
+        CommandHandler("report_day", report_day),
+        CommandHandler("report_week", report_week),
+        CommandHandler("report_mounth", report_mounth),
+        CommandHandler("manual", manual_start),
+        CommandHandler("delete_check", delete_check),
+        CommandHandler("delete_item", delete_item),
+        CommandHandler("report_all", report_all),
+    ],
     allow_reentry=True,
 ))
+
+# === ConversationHandler для отчета за период ===
 application.add_handler(ConversationHandler(
     entry_points=[CommandHandler("report_all", report_all)],
     states={
         REPORT_ALL_FROM: [
             MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_from),
-            *command_handlers
+            MessageHandler(filters.COMMAND, universal_command_exit),
         ],
         REPORT_ALL_TO: [
             MessageHandler(filters.TEXT & (~filters.COMMAND), report_all_to),
-            *command_handlers
+            MessageHandler(filters.COMMAND, universal_command_exit),
         ],
     },
-    fallbacks=[CommandHandler("cancel", cancel), *command_handlers],
+    fallbacks=[
+        CommandHandler("cancel", cancel),
+        CommandHandler("start", start),
+        CommandHandler("info", info),
+        CommandHandler("debug", debug),
+        CommandHandler("report_day", report_day),
+        CommandHandler("report_week", report_week),
+        CommandHandler("report_mounth", report_mounth),
+        CommandHandler("manual", manual_start),
+        CommandHandler("delete_check", delete_check),
+        CommandHandler("delete_item", delete_item),
+        CommandHandler("report_all", report_all),
+    ],
     allow_reentry=True,
 ))
 
-# === Универсальные текстовые и файловые обработчики ===
+# === Обработчики для XML и универсального текста ===
 application.add_handler(MessageHandler(filters.Document.FileExtension("xml"), handle_file))
 application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
 
