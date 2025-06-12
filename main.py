@@ -67,7 +67,11 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    # allow universal info in manual mode
     if context.user_data.get("manual_in_progress"):
+        # Игнорируем все команды, чтобы их поймал filters.COMMAND
+        if text.startswith('/'):
+            return
         await update.message.reply_text("❗ Продовжіть введення назви або ціни товару, або введіть /cancel.")
         return
     if text.lower().startswith("http"):
@@ -98,18 +102,24 @@ async def send_summary(update, items, check_id, item_ids):
 # === Вручную ===
 
 async def manual_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     context.user_data["manual_in_progress"] = True
     await update.message.reply_text("Введіть назву товару:")
     return WAITING_NAME
 
 async def manual_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['manual_data'] = {'name': update.message.text}
+    name = update.message.text.strip()
+    if not name:
+        await update.message.reply_text("❗ Введіть назву товару:")
+        return WAITING_NAME
+    context.user_data['manual_data'] = {'name': name}
     await update.message.reply_text("Введіть суму в грн (наприклад, 23.50):")
     return WAITING_PRICE
 
 async def manual_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
     try:
-        price = float(update.message.text.replace(",", "."))
+        price = float(text.replace(",", "."))
     except ValueError:
         await update.message.reply_text("❌ Невірна сума. Спробуйте ще:")
         return WAITING_PRICE
@@ -134,6 +144,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Универсальный выход по команде из любого диалога ===
 async def universal_command_exit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     await update.message.reply_text("Дія перервана. Виконую команду.")
     return ConversationHandler.END
 
