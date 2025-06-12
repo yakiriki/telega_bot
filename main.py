@@ -1,9 +1,7 @@
 import os
 import logging
-
 from datetime import datetime
 from fastapi import FastAPI, Request, Response
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -209,8 +207,12 @@ async def debug(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Обробники помилок ===
 
+import traceback
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Exception while handling update: {context.error}")
+    traceback_str = ''.join(traceback.format_exception(None, context.error, context.error.__traceback__))
+    logger.error(traceback_str)
 
 # === Telegram Application ===
 
@@ -222,10 +224,6 @@ application.add_handler(CommandHandler("debug", debug))
 application.add_handler(CommandHandler("report_day", report_day))
 application.add_handler(CommandHandler("report_week", report_week))
 application.add_handler(CommandHandler("report_mounth", report_mounth))
-application.add_handler(CommandHandler("report_all", report_all))
-application.add_handler(CommandHandler("manual", manual_start))
-application.add_handler(CommandHandler("delete_check", delete_check))
-application.add_handler(CommandHandler("delete_item", delete_item))
 
 application.add_handler(MessageHandler(filters.Document.FileExtension("xml"), handle_file))
 application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text))
@@ -256,6 +254,7 @@ application.add_handler(ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 ))
+
 application.add_error_handler(error_handler)
 
 # === FastAPI Lifespan ===
